@@ -1,0 +1,13 @@
+{
+  "name": "alesha-popovich-telegram-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "bot/index.mjs",
+  "scripts": {
+    "start": "node bot/index.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
