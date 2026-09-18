@@ -43,8 +43,7 @@ export class OrderGenerator{
           const order=await this.createOrder(worker,managerId);
           if(!order)break;
           active++;
-          await this.app.publishGeneratedOrder(order);
-          this.log.log?.(`Стартовый автозаказ №${order.id} создан для ${userId}: ${order.city}${order.urgent?' (срочный)':''}`);
+          this.log.log?.(`Стартовый автозаказ №${order.id} создан без уведомления для ${userId}: ${order.city}${order.urgent?' (срочный)':''}`);
         }
         if(active>=startupTarget)this.seededRegions.add(userId);
         continue;
