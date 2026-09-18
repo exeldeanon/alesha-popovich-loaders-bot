@@ -16,11 +16,9 @@ export class OrderGenerator{
     this.db=db;this.app=app;this.addressProvider=addressProvider;this.log=logger;
     this.enabled=process.env.BOT_AUTO_ORDERS!=='0';
     this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
-    this.ordersPerHour=Math.max(.1,Number(process.env.BOT_AUTO_ORDERS_PER_HOUR)||1.5);
     this.maxActive=7;
     this.startupTargets=new Map();
     this.seededRegions=new Set();
-    this.urgentChance=Math.min(.9,Math.max(0,Number(process.env.BOT_URGENT_ORDER_CHANCE)||.35));
   }
 
   async tick(){
@@ -52,7 +50,8 @@ export class OrderGenerator{
         continue;
       }
 
-      const frequency=Math.min(60,Math.max(0,Number(worker.auto_orders_per_hour)??1.5));
+      const rawFrequency=Number(worker.auto_orders_per_hour);
+      const frequency=Math.min(60,Math.max(0,Number.isFinite(rawFrequency)?rawFrequency:1.5));
       if(active<this.maxActive&&frequency>0&&Math.random()<frequency/60){
         const order=await this.createOrder(worker,managerId);
         if(!order)continue;
@@ -68,7 +67,8 @@ export class OrderGenerator{
 
   async createOrder(worker,managerId){
     const region=worker.region;
-    const urgentChance=Math.min(.9,Math.max(0,Number(worker.urgent_order_chance)||0));
+    const rawUrgentChance=Number(worker.urgent_order_chance);
+    const urgentChance=Math.min(.9,Math.max(0,Number.isFinite(rawUrgentChance)?rawUrgentChance:.35));
     const urgent=Math.random()<urgentChance;
     const template=randomFrom(TEMPLATES);
     const durationHours=randomInt(template.duration[0],template.duration[1]);
