@@ -233,14 +233,23 @@ export class BotDatabase {
   }
   getAccessRequest(id){return this.db.prepare('SELECT ar.*,u.username,u.first_name FROM access_requests ar JOIN users u ON u.telegram_id=ar.user_id WHERE ar.id=?').get(id);}
   listPendingAccess(limit=20){return this.db.prepare("SELECT ar.*,u.username,u.first_name FROM access_requests ar JOIN users u ON u.telegram_id=ar.user_id WHERE ar.status='pending' ORDER BY ar.created_at LIMIT ?").all(limit);}
-  decideAccess(id,managerId,approved){
+  declineAccess(id,managerId){
     return this.transaction(()=>{
       const request=this.getAccessRequest(id);if(!request||request.status!=='pending')return null;
-      const status=approved?'approved':'declined';
-      this.db.prepare('UPDATE access_requests SET status=?,decided_at=?,decided_by=? WHERE id=?').run(status,now(),String(managerId),id);
-      this.db.prepare("UPDATE users SET status=?,role='worker',verified=0,region='',updated_at=? WHERE telegram_id=?").run(approved?'pending':'new',now(),request.user_id);
-      this.audit(managerId,`access.${status}`,'access_request',id,{userId:request.user_id});
-      return {...request,status};
+      this.db.prepare("UPDATE access_requests SET status='declined',decided_at=?,decided_by=? WHERE id=?").run(now(),String(managerId),id);
+      this.db.prepare("UPDATE users SET status='new',role='worker',verified=0,region='',updated_at=? WHERE telegram_id=?").run(now(),request.user_id);
+      this.audit(managerId,'access.declined','access_request',id,{userId:request.user_id});
+      return {...request,status:'declined'};
+    });
+  }
+  completeAccessVerification(id,managerId,{region,contractorType}){
+    if(!region||!['self_employed','ip'].includes(contractorType))return null;
+    return this.transaction(()=>{
+      const request=this.getAccessRequest(id);if(!request||request.status!=='pending')return null;
+      this.db.prepare("UPDATE access_requests SET status='approved',decided_at=?,decided_by=? WHERE id=?").run(now(),String(managerId),id);
+      this.db.prepare("UPDATE users SET status='active',role='worker',verified=1,region=?,contractor_type=?,updated_at=? WHERE telegram_id=?").run(String(region),String(contractorType),now(),request.user_id);
+      this.audit(managerId,'access.approved','access_request',id,{userId:request.user_id,region,contractorType});
+      return {...request,status:'approved',region,contractor_type:contractorType};
     });
   }
 
