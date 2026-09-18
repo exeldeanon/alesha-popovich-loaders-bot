@@ -151,6 +151,8 @@ export class BotDatabase {
     };
     addColumn('users','region',"TEXT NOT NULL DEFAULT ''");
     addColumn('users','contractor_type',"TEXT NOT NULL DEFAULT 'self_employed' CHECK(contractor_type IN ('self_employed','ip'))");
+    addColumn('users','verified',"INTEGER NOT NULL DEFAULT 0 CHECK(verified IN (0,1))");
+    this.db.prepare("UPDATE users SET verified=1 WHERE status='active' AND (role='manager' OR (role='worker' AND region<>''))").run();
     addColumn('orders','region',"TEXT NOT NULL DEFAULT ''");
     addColumn('orders','self_employed_rate',"INTEGER NOT NULL DEFAULT 450");
     addColumn('orders','ip_rate',"INTEGER NOT NULL DEFAULT 550");
@@ -210,11 +212,12 @@ export class BotDatabase {
       ON CONFLICT(telegram_id) DO UPDATE SET role='manager',status='active',updated_at=excluded.updated_at`).run(key,stamp,stamp,stamp);
   }
   getUser(id){return this.db.prepare('SELECT * FROM users WHERE telegram_id=?').get(String(id));}
-  listActiveWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND notifications=1 ORDER BY created_at").all();}
-  listActiveWorkersByRegion(region){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND notifications=1 AND region=? ORDER BY created_at").all(String(region||''));}
-  listActiveWorkerRegions(){return this.db.prepare("SELECT DISTINCT region FROM users WHERE role='worker' AND status='active' AND region<>'' ORDER BY region").all().map(row=>row.region);}
-  listWorkers(limit=50){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' ORDER BY first_name,last_name,created_at LIMIT ?").all(limit);}
+  listActiveWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 ORDER BY created_at").all();}
+  listActiveWorkersByRegion(region){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 AND region=? ORDER BY created_at").all(String(region||''));}
+  listActiveWorkerRegions(){return this.db.prepare("SELECT DISTINCT region FROM users WHERE role='worker' AND status='active' AND verified=1 AND region<>'' ORDER BY region").all().map(row=>row.region);}
+  listWorkers(limit=50){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 ORDER BY first_name,last_name,created_at LIMIT ?").all(limit);}
   updateWorkerProfile(userId,{region,contractorType}){const user=this.getUser(userId);if(!user)return null;const nextRegion=region===undefined?user.region:String(region||'');const nextType=contractorType===undefined?user.contractor_type:String(contractorType);if(!['self_employed','ip'].includes(nextType))throw Error('Invalid contractor type');this.db.prepare("UPDATE users SET region=?,contractor_type=?,updated_at=? WHERE telegram_id=?").run(nextRegion,nextType,now(),String(userId));this.audit(null,'worker.profile','user',userId,{region:nextRegion,contractorType:nextType});return this.getUser(userId);}
+  verifyWorker(userId,managerId,{region,contractorType}){if(!region||!['self_employed','ip'].includes(contractorType))return null;this.db.prepare("UPDATE users SET status='active',role='worker',verified=1,region=?,contractor_type=?,updated_at=? WHERE telegram_id=?").run(String(region),String(contractorType),now(),String(userId));this.audit(managerId,'worker.verify','user',userId,{region,contractorType});return this.getUser(userId);}
   listManagers(){return this.db.prepare("SELECT * FROM users WHERE role='manager' AND status='active'").all();}
   getGeneratorManagerId(){return this.listManagers()[0]?.telegram_id||null;}
   toggleNotifications(id){this.db.prepare('UPDATE users SET notifications=1-notifications,updated_at=? WHERE telegram_id=?').run(now(),String(id));return this.getUser(id);}
@@ -223,7 +226,7 @@ export class BotDatabase {
     return this.transaction(()=>{
       this.db.prepare("UPDATE access_requests SET status='declined',decided_at=? WHERE user_id=? AND status='pending'").run(now(),String(userId));
       const result=this.db.prepare('INSERT INTO access_requests(user_id,name,city,phone,experience,created_at) VALUES(?,?,?,?,?,?)').run(String(userId),name,city,phone,experience||'',now());
-      this.db.prepare("UPDATE users SET status='pending',city=?,phone=?,updated_at=? WHERE telegram_id=?").run(city,phone,now(),String(userId));
+      this.db.prepare("UPDATE users SET status='pending',verified=0,region='',city=?,phone=?,updated_at=? WHERE telegram_id=?").run(city,phone,now(),String(userId));
       this.audit(userId,'access.request','access_request',result.lastInsertRowid,{city});
       return num(result.lastInsertRowid);
     });
@@ -235,7 +238,7 @@ export class BotDatabase {
       const request=this.getAccessRequest(id);if(!request||request.status!=='pending')return null;
       const status=approved?'approved':'declined';
       this.db.prepare('UPDATE access_requests SET status=?,decided_at=?,decided_by=? WHERE id=?').run(status,now(),String(managerId),id);
-      this.db.prepare("UPDATE users SET status=?,role='worker',region=CASE WHEN region='' THEN lower(?) ELSE region END,updated_at=? WHERE telegram_id=?").run(approved?'active':'new',request.city,now(),request.user_id);
+      this.db.prepare("UPDATE users SET status=?,role='worker',verified=0,region='',updated_at=? WHERE telegram_id=?").run(approved?'pending':'new',now(),request.user_id);
       this.audit(managerId,`access.${status}`,'access_request',id,{userId:request.user_id});
       return {...request,status};
     });
@@ -272,7 +275,7 @@ export class BotDatabase {
 
   applyToOrder(orderId,userId){
     const order=this.getOrder(orderId);if(!order||order.status!=='active')return {error:'closed'};
-    const user=this.getUser(userId);if(!user||user.status!=='active'||user.role!=='worker')return {error:'access'};
+    const user=this.getUser(userId);if(!user||user.status!=='active'||user.role!=='worker'||user.verified!==1||!user.region)return {error:'access'};
     try{const stamp=now();const result=this.db.prepare("INSERT INTO applications(order_id,user_id,status,created_at,updated_at) VALUES(?,?,'pending',?,?)").run(orderId,String(userId),stamp,stamp);const id=num(result.lastInsertRowid);this.audit(userId,'application.create','application',id,{orderId});return {application:this.getApplication(id)};}catch(error){if(String(error).includes('UNIQUE'))return {error:'duplicate'};throw error;}
   }
   getApplication(id){return this.db.prepare(`SELECT a.*,o.title,o.city,o.address,o.starts_at,o.duration_hours,o.amount,o.people_needed,u.username,u.first_name,u.last_name,u.phone FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.id=?`).get(id);}
@@ -325,5 +328,5 @@ export class BotDatabase {
   setSetting(key,value){this.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(value));}
   markNotification(kind,entityId,userId){try{this.db.prepare('INSERT INTO notifications_sent(kind,entity_id,user_id,sent_at) VALUES(?,?,?,?)').run(kind,String(entityId),String(userId),now());return true;}catch(error){if(String(error).includes('UNIQUE'))return false;throw error;}}
   remindersDue(beforeIso){return this.db.prepare(`SELECT s.id,s.user_id,o.title,o.city,o.address,o.starts_at FROM shifts s JOIN orders o ON o.id=s.order_id LEFT JOIN notifications_sent n ON n.kind='shift_reminder' AND n.entity_id=CAST(s.id AS TEXT) AND n.user_id=s.user_id WHERE s.status='assigned' AND o.starts_at>? AND o.starts_at<=? AND n.entity_id IS NULL ORDER BY o.starts_at`).all(now(),beforeIso);}
-  stats(){return {workers:num(this.db.prepare("SELECT COUNT(*) count FROM users WHERE role='worker' AND status='active'").get().count),activeOrders:num(this.db.prepare("SELECT COUNT(*) count FROM orders WHERE status IN ('active','filled')").get().count),pendingAccess:num(this.db.prepare("SELECT COUNT(*) count FROM access_requests WHERE status='pending'").get().count),pendingApplications:num(this.db.prepare("SELECT COUNT(*) count FROM applications WHERE status='pending'").get().count),pendingShifts:num(this.db.prepare("SELECT COUNT(*) count FROM shifts WHERE status='pending_confirmation'").get().count),pendingWithdrawals:num(this.db.prepare("SELECT COUNT(*) count FROM withdrawals WHERE status='pending'").get().count),paidTotal:num(this.db.prepare("SELECT COALESCE(SUM(amount),0) total FROM withdrawals WHERE status='paid'").get().total)};}
+  stats(){return {workers:num(this.db.prepare("SELECT COUNT(*) count FROM users WHERE role='worker' AND status='active' AND verified=1").get().count),activeOrders:num(this.db.prepare("SELECT COUNT(*) count FROM orders WHERE status IN ('active','filled')").get().count),pendingAccess:num(this.db.prepare("SELECT COUNT(*) count FROM access_requests WHERE status='pending'").get().count),pendingApplications:num(this.db.prepare("SELECT COUNT(*) count FROM applications WHERE status='pending'").get().count),pendingShifts:num(this.db.prepare("SELECT COUNT(*) count FROM shifts WHERE status='pending_confirmation'").get().count),pendingWithdrawals:num(this.db.prepare("SELECT COUNT(*) count FROM withdrawals WHERE status='pending'").get().count),paidTotal:num(this.db.prepare("SELECT COALESCE(SUM(amount),0) total FROM withdrawals WHERE status='paid'").get().total)};}
 }
