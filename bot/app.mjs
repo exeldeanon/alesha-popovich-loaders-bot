@@ -492,6 +492,26 @@ export class BotApp{
 
   async createWithdrawal(chatId,user,amount){const result=this.db.createWithdrawal(user.telegram_id,amount);if(result.error)return this.safeSend(chatId,`Недоступная сумма. Сейчас можно вывести ${money(result.cabinet.available)}.`);this.db.clearSession(user.telegram_id);await this.notifyManagers(withdrawalText(result.withdrawal),{reply_markup:decisionKeyboard('withdrawal_decide',result.withdrawal.id,'Выплачено')});return this.menu(chatId,user,`Заявка на ${money(amount)} отправлена менеджеру.`);}
 
+  async notifyRateIncrease(previousOrder,updatedOrder){
+    if(!updatedOrder?.urgent||!updatedOrder?.target_user_id)return null;
+    const worker=this.db.getUser(updatedOrder.target_user_id);
+    if(!worker||!this.canPush(worker,'rate'))return null;
+    const duration=Number(updatedOrder.duration_hours||0);
+    const oldRate=worker.contractor_type==='ip'?Math.max(550,Number(previousOrder.ip_rate)||550):(Number(previousOrder.self_employed_rate)||450);
+    const newRate=worker.contractor_type==='ip'?Math.max(550,Number(updatedOrder.ip_rate)||550):(Number(updatedOrder.self_employed_rate)||450);
+    const oldTotal=Math.round(oldRate*duration),newTotal=Math.round(newRate*duration);
+    if(newTotal<=oldTotal)return null;
+    return this.safeSend(worker.telegram_id,[
+      '<b>🔥 Ставка выросла!</b>',
+      `Заказ №${updatedOrder.id}: ${e(updatedOrder.title)}`,
+      `🏠 ${e(updatedOrder.address)}`,
+      `Было: <s>${money(oldTotal)}</s> → стало: <b>${money(newTotal)}</b>`,
+    ].join('\n'),{reply_markup:inline([
+      [{text:'📦 Открыть заказ',callback_data:`order_view:${updatedOrder.id}:0`}],
+      [{text:'⚙️ Настройки уведомлений',callback_data:'user_notify:rate'}],
+    ])});
+  }
+
   async sendOrderNudges(intervalMinutes=45){
     const intervalMs=Math.max(10,Number(intervalMinutes)||45)*60_000;
     const messages=[
@@ -501,7 +521,7 @@ export class BotApp{
       count=>`Эй, работа сама себя не возьмёт 😄 Сейчас <b>${count}</b> заказов. Погнали смотреть.`,
     ];
     for(const worker of this.db.listAutoOrderWorkers()){
-      if(worker.order_nudges!==1||worker.maintenance_mode===1)continue;
+      if(!this.canPush(worker,'nudge'))continue;
       const last=worker.last_order_nudge_at?new Date(worker.last_order_nudge_at).getTime():0;
       if(last&&Date.now()-last<intervalMs)continue;
       const orders=this.workerOrders(worker);
@@ -665,5 +685,13 @@ export class BotApp{
     return this.safeSend(chatId,'Кнопка устарела. Откройте нужный раздел ещё раз.');
   }
 
-  async sendReminders(minutes=120){const before=new Date(Date.now()+minutes*60_000).toISOString();for(const item of this.db.remindersDue(before)){const sent=await this.safeSend(item.user_id,`<b>Смена скоро начнётся</b>\n${e(item.title)} · ${e(item.city)}\nАдрес: ${e(item.address)}\nВремя: ${new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short',timeZone:'Europe/Moscow'}).format(new Date(item.starts_at))}`);if(sent)this.db.markNotification('shift_reminder',item.id,item.user_id);}}
+  async sendReminders(minutes=120){
+    const before=new Date(Date.now()+minutes*60_000).toISOString();
+    for(const item of this.db.remindersDue(before)){
+      const worker=this.db.getUser(item.user_id);
+      if(!this.canPush(worker,'shift_reminder'))continue;
+      const sent=await this.safeSend(item.user_id,`<b>Смена скоро начнётся</b>\n${e(item.title)} · ${e(item.city)}\nАдрес: ${e(item.address)}\nВремя: ${new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short',timeZone:'Europe/Moscow'}).format(new Date(item.starts_at))}`);
+      if(sent)this.db.markNotification('shift_reminder',item.id,item.user_id);
+    }
+  }
 }
