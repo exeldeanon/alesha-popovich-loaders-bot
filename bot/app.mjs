@@ -440,7 +440,10 @@ export class BotApp{
           {text:worker.verified===1&&worker.contractor_type==='self_employed'?'✅ Самозанятый':'Самозанятый',callback_data:`worker_status:${worker.telegram_id}:self_employed`},
         ],
         [{text:'📍 Изменить регион / город',callback_data:`worker_region_custom:${worker.telegram_id}`}],
-        [{text:'⚙️ Персональные настройки',callback_data:`worker_settings:${worker.telegram_id}`}],
+        [
+          {text:'⚙️ Персональные настройки',callback_data:`worker_settings:${worker.telegram_id}`},
+          {text:'📊 Воронка',callback_data:`worker_funnel:${worker.telegram_id}`},
+        ],
       ];
       await this.safeSend(chatId,workerProfileText({...worker,region:label}),{reply_markup:inline(rows)});
     }
@@ -460,6 +463,15 @@ export class BotApp{
       ],
     ];
     return this.safeSend(chatId,`${notice?e(notice)+'\n\n':''}${workerSettingsText(worker)}`,{reply_markup:inline(rows)});
+  }
+
+  async showWorkerFunnel(chatId,workerId){
+    const worker=this.db.getUser(workerId);if(!worker)return this.safeSend(chatId,'Грузчик не найден.',{reply_markup:managerMenu});
+    const funnel=this.db.getWorkerFunnel(workerId);
+    return this.safeSend(chatId,workerFunnelText(worker,funnel),{reply_markup:inline([
+      [{text:'📋 Логи действий',callback_data:`worker_logs:${worker.telegram_id}`}],
+      [{text:'⚙️ К настройкам',callback_data:`worker_settings:${worker.telegram_id}`}],
+    ])});
   }
 
   async showWorkerLogs(chatId,workerId){
@@ -565,6 +577,7 @@ export class BotApp{
       return this.safeSend(chatId,`Тип занятости: <b>${match[2]==='ip'?'ИП':'Самозанятый'}</b>.\nТеперь введите регион или город, который нужно назначить грузчику. Например: «Самара», «Краснодарский край», «Республика Татарстан».`,{reply_markup:removeKeyboard()});
     }
     match=data.match(/^worker_settings:(\d+)$/);if(match&&this.isManager(user))return this.showWorkerSettings(chatId,match[1]);
+    match=data.match(/^worker_funnel:(\d+)$/);if(match&&this.isManager(user))return this.showWorkerFunnel(chatId,match[1]);
     match=data.match(/^worker_setting_input:(\d+):(frequency|urgent)$/);if(match&&this.isManager(user)){
       const worker=this.db.getUser(match[1]);if(!worker)return this.safeSend(chatId,'Грузчик не найден.');
       this.db.setSession(user.telegram_id,'worker_setting',match[2],{workerId:worker.telegram_id});
