@@ -22,14 +22,19 @@ export class OrderGenerator{
   }
 
   async tick(){
-    if(!this.enabled)return;
+    if(!this.enabled){this.log.log?.('Автогенератор заказов выключен: установите BOT_AUTO_ORDERS=1.');return;}
     const managerId=this.db.getGeneratorManagerId();
-    if(!managerId)return;
+    if(!managerId){this.log.warn?.('Автогенератор: не найден активный менеджер. Укажите BOT_ADMIN_IDS или войдите менеджером в бот.');return;}
 
-    const workerRegions=this.db.listActiveWorkerRegions();
+    const workerRegions=this.db.listAutoOrderRegions();
+    if(!workerRegions.length){
+      this.log.warn?.('Автогенератор: нет пользователей с назначенным регионом; создавать заказы не для чего.');
+      return;
+    }
     for(const region of workerRegions){
       const active=this.db.countActiveGeneratedOrders(region);
-      if(active<this.maxActive&&Math.random()<this.ordersPerHour/60){
+      const shouldCreate=active===0||Math.random()<this.ordersPerHour/60;
+      if(active<this.maxActive&&shouldCreate){
         const order=await this.createOrder(region,managerId);
         if(!order)continue;
         await this.app.publishGeneratedOrder(order);
