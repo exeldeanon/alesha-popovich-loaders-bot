@@ -4,6 +4,7 @@ export const workerMenu=reply([
   ['📦 Активные заказы','🗓 Мои смены'],
   ['💰 Личный кабинет','📜 История смен'],
   ['💸 Запросить выплату','🔔 Уведомления'],
+  [{text:'📍 Обновить геопозицию',request_location:true}],
   ['🆘 Помощь'],
 ]);
 
@@ -33,34 +34,34 @@ export const managerMenu=reply([
   ['🆘 Помощь'],
 ]);
 
-export function orderText(order,{manager=false,assigned=false,worker=null}={}){
+export function orderText(order,{manager=false,assigned=false,worker=null,distanceKm=null}={}){
   const real=Number(order.assigned_count||0),simulated=Number(order.simulated_assigned||0);
   const occupied=real+simulated;
   const places=Math.max(0,Number(order.people_needed)-occupied);
   const contractorType=worker?.contractor_type||'self_employed';
   const selfRate=Number(order.self_employed_rate)||450;
   const ipRate=Math.max(550,Number(order.ip_rate)||550);
+  const duration=Number(order.duration_hours||0);
+  const selfTotal=Math.round(selfRate*duration);
+  const ipTotal=Math.round(ipRate*duration);
   const workerRate=contractorType==='ip'?ipRate:selfRate;
-  const workerTotal=Math.round(workerRate*Number(order.duration_hours||0));
-  const ipBonus=Math.max(0,ipRate-selfRate);
+  const workerTotal=contractorType==='ip'?ipTotal:selfTotal;
+  const distance=Number.isFinite(Number(distanceKm))?` · примерно ${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1}).format(Number(distanceKm))} км от вас`:'';
   return [
     order.urgent?'<b>🔥 СРОЧНЫЙ ЗАКАЗ</b>':null,
-    order.generated?'<i>🤖 Автосформированный заказ</i>':null,
     `<b>📦 Заказ №${order.id}: ${e(order.title)}</b>`,
     `📍 ${e(order.city)}`,
-    assigned||manager?`🏠 ${e(order.address)}`:null,
+    order.address?`🏠 ${e(order.address)}${distance}`:null,
     `🕒 ${formatDate(order.starts_at)}`,
     `⏱ Ориентир: ${hours(order.duration_hours)}`,
-    manager?`💰 Самозанятые: ${money(selfRate)}/ч`:null,
-    manager?`⭐ ИП: ${money(ipRate)}/ч`:null,
-    worker?.verified===1?`${contractorType==='ip'?'⭐ ИП':'💰 Самозанятый'}: <b>${money(workerRate)}/ч</b> · ориентир ${money(workerTotal)}`:null,
-    worker?.verified===1&&contractorType!=='ip'&&ipBonus>0?`💼 С ИП ставка на этом заказе выше на ${money(ipBonus)}/ч — ${money(ipRate)}/ч.`:null,
-    (!worker||worker?.verified!==1)&&!manager?`💰 От ${money(selfRate)}/ч · для ИП ${money(ipRate)}/ч`:null,
+    manager?`💰 Самозанятые: ${money(selfRate)}/ч · ориентир ${money(selfTotal)}`:null,
+    manager?`⭐ ИП: ${money(ipRate)}/ч · ориентир ${money(ipTotal)}`:null,
+    worker?.verified===1?`${contractorType==='ip'?'⭐ ИП':'💰 Самозанятый'}: <b>${money(workerRate)}/ч</b> · ориентир выплаты <b>${money(workerTotal)}</b>`:null,
+    (!worker||worker?.verified!==1)&&!manager?`💰 Самозанятый: ${money(selfRate)}/ч · ориентир ${money(selfTotal)}\n⭐ ИП: ${money(ipRate)}/ч · ориентир ${money(ipTotal)}`:null,
     `👥 Свободно мест: ${places} из ${order.people_needed}`,
     manager&&simulated?`🧪 Демо-заполнение: ${simulated}; реальных назначено: ${real}`:null,
     order.description?`\n${e(short(order.description,500))}`:null,
     order.generated?'🗺 Геоданные: © OpenStreetMap contributors':null,
-    !assigned&&!manager?'\nТочный адрес появится после назначения.':null,
   ].filter(Boolean).join('\n');
 }
 
@@ -80,13 +81,18 @@ export function workerProfileText(user){return [
   `💼 Статус: ${verificationStatus(user)}`,
 ].filter(Boolean).join('\n');}
 
-export function applicationText(item){return [
-  `<b>👷 Отклик №${item.id}</b>`,
-  `Заказ: ${e(item.title)} · ${e(item.city)}`,
-  `Когда: ${formatDate(item.starts_at)}`,
-  `Грузчик: ${e(fullName(item))}${item.username?` (@${e(item.username)})`:''}`,
-  `Оплата: ${money(item.amount)}`,
-].filter(Boolean).join('\n');}
+export function applicationText(item){
+  const rate=item.contractor_type==='ip'?Math.max(550,Number(item.ip_rate)||550):(Number(item.self_employed_rate)||450);
+  const total=Math.round(rate*Number(item.duration_hours||0))||Number(item.amount)||0;
+  return [
+    `<b>👷 Отклик №${item.id}</b>`,
+    `Заказ: ${e(item.title)} · ${e(item.city)}`,
+    `Когда: ${formatDate(item.starts_at)}`,
+    `Грузчик: ${e(fullName(item))}${item.username?` (@${e(item.username)})`:''}`,
+    `Статус: ${item.contractor_type==='ip'?'ИП':'Самозанятый'}`,
+    `Ориентир выплаты: ${money(total)} (${money(rate)}/ч)`,
+  ].filter(Boolean).join('\n');
+}
 
 export function accessText(item){return [
   `<b>🔑 Запрос доступа №${item.id}</b>`,
