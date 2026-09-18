@@ -1,5 +1,5 @@
 import process from 'node:process';
-import {generateAddress,randomFrom,randomInt,REGIONS} from './regions.mjs';
+import {randomFrom,randomInt} from './regions.mjs';
 
 const TEMPLATES=[
   {title:'Разгрузка фуры',locationType:'warehouse',duration:[3,7],people:[3,8],description:'Разгрузка и перенос груза на объекте.'},
@@ -12,8 +12,8 @@ const TEMPLATES=[
 const weightedIpRate=urgent=>randomFrom(urgent?[650,650,700,700,750,800]:[550,550,550,600,600,650]);
 
 export class OrderGenerator{
-  constructor({db,app,logger=console}){
-    this.db=db;this.app=app;this.log=logger;
+  constructor({db,app,addressProvider,logger=console}){
+    this.db=db;this.app=app;this.addressProvider=addressProvider;this.log=logger;
     this.enabled=process.env.BOT_AUTO_ORDERS==='1';
     this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
     this.ordersPerHour=Math.max(.1,Number(process.env.BOT_AUTO_ORDERS_PER_HOUR)||1.5);
@@ -26,11 +26,12 @@ export class OrderGenerator{
     const managerId=this.db.getGeneratorManagerId();
     if(!managerId)return;
 
-    const workerRegions=this.db.listActiveWorkerRegions().filter(key=>REGIONS[key]);
+    const workerRegions=this.db.listActiveWorkerRegions();
     for(const region of workerRegions){
       const active=this.db.countActiveGeneratedOrders(region);
       if(active<this.maxActive&&Math.random()<this.ordersPerHour/60){
-        const order=this.createOrder(region,managerId);
+        const order=await this.createOrder(region,managerId);
+        if(!order)continue;
         await this.app.publishGeneratedOrder(order);
         this.log.log?.(`Автозаказ №${order.id} создан: ${order.city}${order.urgent?' (срочный)':''}`);
       }
@@ -41,7 +42,7 @@ export class OrderGenerator{
     }
   }
 
-  createOrder(region,managerId){
+  async createOrder(region,managerId){
     const urgent=Math.random()<this.urgentChance;
     const template=randomFrom(TEMPLATES);
     const durationHours=randomInt(template.duration[0],template.duration[1]);
@@ -53,12 +54,14 @@ export class OrderGenerator{
     const selfEmployedRate=450;
     const ipRate=weightedIpRate(urgent);
     const simulatedAssigned=this.simulationMode?randomInt(0,Math.min(2,Math.max(0,peopleNeeded-1))):0;
+    const resolved=await this.addressProvider?.getAddress(region);
+    if(!resolved){this.log.warn?.(`Нет реального адреса для региона ${region}; заказ пропущен.`);return null;}
 
     return this.db.createGeneratedOrder({
       title:urgent?`Срочно: ${template.title}`:template.title,
-      city:REGIONS[region].name,
-      region,
-      address:generateAddress(region,template.locationType),
+      city:resolved.regionLabel,
+      region:resolved.regionKey,
+      address:resolved.address,
       startsAt:starts.toISOString(),
       durationHours,
       peopleNeeded,
