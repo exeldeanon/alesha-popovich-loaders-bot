@@ -7,7 +7,7 @@ export class AddressProvider{
   constructor({db,logger=console}={}){
     this.db=db;this.log=logger;
     this.nominatimUrl=process.env.BOT_NOMINATIM_URL||'https://nominatim.openstreetmap.org';
-    this.overpassUrl=process.env.BOT_OVERPASS_URL||'https://overpass-api.de/api/interpreter';
+    this.overpassUrl=process.env.BOT_OVERPASS_URL||'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
     this.userAgent=process.env.BOT_OSM_USER_AGENT||'AleshaPopovichLoadersBot/1.0 (+https://github.com/exeldeanon/alesha-popovich-loaders-bot)';
     this.lastNominatimAt=0;
   }
