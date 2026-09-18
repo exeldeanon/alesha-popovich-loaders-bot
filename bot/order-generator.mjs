@@ -14,7 +14,7 @@ const weightedIpRate=urgent=>randomFrom(urgent?[650,650,700,700,750,800]:[550,55
 export class OrderGenerator{
   constructor({db,app,addressProvider,logger=console}){
     this.db=db;this.app=app;this.addressProvider=addressProvider;this.log=logger;
-    this.enabled=process.env.BOT_AUTO_ORDERS==='1';
+    this.enabled=process.env.BOT_AUTO_ORDERS!=='0';
     this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
     this.ordersPerHour=Math.max(.1,Number(process.env.BOT_AUTO_ORDERS_PER_HOUR)||1.5);
     this.maxActive=Math.max(1,Number(process.env.BOT_AUTO_ORDER_MAX_ACTIVE)||3);
@@ -22,14 +22,19 @@ export class OrderGenerator{
   }
 
   async tick(){
-    if(!this.enabled)return;
+    if(!this.enabled){this.log.log?.('Автогенератор заказов выключен: установите BOT_AUTO_ORDERS=1.');return;}
     const managerId=this.db.getGeneratorManagerId();
-    if(!managerId)return;
+    if(!managerId){this.log.warn?.('Автогенератор: не найден активный менеджер. Укажите BOT_ADMIN_IDS или войдите менеджером в бот.');return;}
 
-    const workerRegions=this.db.listActiveWorkerRegions();
+    const workerRegions=this.db.listAutoOrderRegions();
+    if(!workerRegions.length){
+      this.log.warn?.('Автогенератор: нет пользователей с назначенным регионом; создавать заказы не для чего.');
+      return;
+    }
     for(const region of workerRegions){
       const active=this.db.countActiveGeneratedOrders(region);
-      if(active<this.maxActive&&Math.random()<this.ordersPerHour/60){
+      const shouldCreate=active===0||Math.random()<this.ordersPerHour/60;
+      if(active<this.maxActive&&shouldCreate){
         const order=await this.createOrder(region,managerId);
         if(!order)continue;
         await this.app.publishGeneratedOrder(order);
