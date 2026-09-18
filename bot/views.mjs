@@ -8,6 +8,7 @@ export const workerMenu=reply([
 ]);
 
 export const unverifiedWorkerMenu=reply([
+  ['📦 Активные заказы'],
   ['💰 Личный кабинет'],
   ['🔑 Запросить верификацию'],
   ['🆘 Помощь'],
@@ -45,9 +46,9 @@ export function orderText(order,{manager=false,assigned=false,worker=null}={}){
     `⏱ Ориентир: ${hours(order.duration_hours)}`,
     manager?`💰 Самозанятые: ${money(selfRate)}/ч`:null,
     manager?`⭐ ИП: ${money(ipRate)}/ч`:null,
-    worker?`${contractorType==='ip'?'⭐ ИП':'💰 Самозанятый'}: <b>${money(workerRate)}/ч</b> · ориентир ${money(workerTotal)}`:null,
-    worker&&contractorType!=='ip'&&ipBonus>0?`💼 С ИП ставка на этом заказе выше на ${money(ipBonus)}/ч — ${money(ipRate)}/ч.`:null,
-    !worker&&!manager?`💰 От ${money(selfRate)}/ч · для ИП ${money(ipRate)}/ч`:null,
+    worker?.verified===1?`${contractorType==='ip'?'⭐ ИП':'💰 Самозанятый'}: <b>${money(workerRate)}/ч</b> · ориентир ${money(workerTotal)}`:null,
+    worker?.verified===1&&contractorType!=='ip'&&ipBonus>0?`💼 С ИП ставка на этом заказе выше на ${money(ipBonus)}/ч — ${money(ipRate)}/ч.`:null,
+    (!worker||worker?.verified!==1)&&!manager?`💰 От ${money(selfRate)}/ч · для ИП ${money(ipRate)}/ч`:null,
     `👥 Свободно мест: ${places} из ${order.people_needed}`,
     manager&&simulated?`🧪 Демо-заполнение: ${simulated}; реальных назначено: ${real}`:null,
     order.description?`\n${e(short(order.description,500))}`:null,
@@ -77,7 +78,6 @@ export function applicationText(item){return [
   `Заказ: ${e(item.title)} · ${e(item.city)}`,
   `Когда: ${formatDate(item.starts_at)}`,
   `Грузчик: ${e(fullName(item))}${item.username?` (@${e(item.username)})`:''}`,
-  item.phone?`Телефон: ${e(item.phone)}`:null,
   `Оплата: ${money(item.amount)}`,
 ].filter(Boolean).join('\n');}
 
@@ -85,7 +85,6 @@ export function accessText(item){return [
   `<b>🔑 Запрос доступа №${item.id}</b>`,
   `Имя: ${e(item.name)}`,
   `Город: ${e(item.city)}`,
-  `Телефон: ${e(item.phone)}`,
   item.experience?`Опыт: ${e(short(item.experience,500))}`:null,
   item.username?`Telegram: @${e(item.username)}`:`Telegram ID: <code>${e(item.user_id)}</code>`,
 ].filter(Boolean).join('\n');}
@@ -108,7 +107,7 @@ export function cabinetText(user,cabinet){return [
   `${e(fullName(user))}${user.city?` · ${e(user.city)}`:''}`,
   `🪪 Статус: <b>${verificationStatus(user)}</b>`,
   user.region?`📍 Регион: ${e(user.region)}`:null,
-  user.verified!==1?'⚠️ Чтобы получить доступ к заказам, запросите верификацию у менеджера.':null,
+  user.verified!==1?'⚠️ Заказы можно просматривать, но откликаться на них можно только после верификации у менеджера.':null,
   '',
   `✅ Выполнено смен: <b>${cabinet.shifts}</b>`,
   `⏱ Отработано: <b>${hours(cabinet.hours)}</b>`,
@@ -122,7 +121,6 @@ export function cabinetText(user,cabinet){return [
 export function withdrawalText(item){return [
   `<b>💸 Запрос выплаты №${item.id}</b>`,
   `Грузчик: ${e(fullName(item))}${item.username?` (@${e(item.username)})`:''}`,
-  item.phone?`Телефон: ${e(item.phone)}`:null,
   `Сумма: <b>${money(item.amount)}</b>`,
 ].filter(Boolean).join('\n');}
 
