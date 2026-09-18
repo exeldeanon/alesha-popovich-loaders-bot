@@ -129,7 +129,9 @@ export class OrderGenerator{
     }
 
     if(ipRate!==Number(order.ip_rate)||simulatedAssigned!==Number(order.simulated_assigned)){
-      this.db.updateGeneratedOrderDynamics(order.id,{ipRate,simulatedAssigned});
+      const previous={...order};
+      const updated=this.db.updateGeneratedOrderDynamics(order.id,{ipRate,simulatedAssigned});
+      if(ipRate>Number(previous.ip_rate))await this.app.notifyRateIncrease(previous,updated);
       await this.app.refreshOrderMessages(order.id);
     }
   }
