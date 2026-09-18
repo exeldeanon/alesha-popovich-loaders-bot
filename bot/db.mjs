@@ -171,6 +171,12 @@ export class BotDatabase {
     addColumn('users','action_logging',"INTEGER NOT NULL DEFAULT 0 CHECK(action_logging IN (0,1))");
     addColumn('users','order_nudges',"INTEGER NOT NULL DEFAULT 1 CHECK(order_nudges IN (0,1))");
     addColumn('users','last_order_nudge_at',"TEXT");
+    addColumn('users','work_time_preference',"TEXT NOT NULL DEFAULT 'any' CHECK(work_time_preference IN ('any','morning','day','evening'))");
+    addColumn('users','dnd_enabled',"INTEGER NOT NULL DEFAULT 0 CHECK(dnd_enabled IN (0,1))");
+    addColumn('users','dnd_start',"TEXT NOT NULL DEFAULT '23:00'");
+    addColumn('users','dnd_end',"TEXT NOT NULL DEFAULT '08:00'");
+    addColumn('users','rate_notifications',"INTEGER NOT NULL DEFAULT 1 CHECK(rate_notifications IN (0,1))");
+    addColumn('users','shift_reminder_notifications',"INTEGER NOT NULL DEFAULT 1 CHECK(shift_reminder_notifications IN (0,1))");
     this.db.prepare("UPDATE users SET verified=1 WHERE status='active' AND (role='manager' OR (role='worker' AND region<>''))").run();
     addColumn('orders','region',"TEXT NOT NULL DEFAULT ''");
     addColumn('orders','self_employed_rate',"INTEGER NOT NULL DEFAULT 450");
@@ -214,6 +220,14 @@ export class BotDatabase {
         UNIQUE(region_key,address)
       );
       CREATE INDEX IF NOT EXISTS idx_region_addresses_key ON region_addresses(region_key,use_count,last_used_at);
+      CREATE TABLE IF NOT EXISTS worker_order_events(
+        user_id TEXT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        event TEXT NOT NULL CHECK(event IN ('seen','opened','applied')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(user_id,order_id,event)
+      );
+      CREATE INDEX IF NOT EXISTS idx_worker_order_events_user ON worker_order_events(user_id,event,created_at);
     `);
   }
 
@@ -247,6 +261,34 @@ export class BotDatabase {
   toggleNotifications(id){this.db.prepare('UPDATE users SET notifications=1-notifications,updated_at=? WHERE telegram_id=?').run(now(),String(id));return this.getUser(id);}
   setOrderNudges(id,enabled){const value=enabled?1:0,stamp=now();this.db.prepare('UPDATE users SET order_nudges=?,last_order_nudge_at=CASE WHEN ?=1 THEN ? ELSE last_order_nudge_at END,updated_at=? WHERE telegram_id=?').run(value,value,stamp,stamp,String(id));return this.getUser(id);}
   markOrderNudgeSent(id){const stamp=now();this.db.prepare('UPDATE users SET last_order_nudge_at=?,updated_at=? WHERE telegram_id=?').run(stamp,stamp,String(id));return this.getUser(id);}
+  updateUserPreferences(userId,changes={}){
+    const user=this.getUser(userId);if(!user||user.role!=='worker')return null;
+    const allowedTimes=['any','morning','day','evening'];
+    const preference=changes.workTimePreference===undefined?user.work_time_preference:(allowedTimes.includes(changes.workTimePreference)?changes.workTimePreference:'any');
+    const dndEnabled=changes.dndEnabled===undefined?Number(user.dnd_enabled):(changes.dndEnabled?1:0);
+    const validTime=value=>/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value||''));
+    const dndStart=changes.dndStart===undefined?user.dnd_start:(validTime(changes.dndStart)?String(changes.dndStart):user.dnd_start);
+    const dndEnd=changes.dndEnd===undefined?user.dnd_end:(validTime(changes.dndEnd)?String(changes.dndEnd):user.dnd_end);
+    const newOrders=changes.newOrderNotifications===undefined?Number(user.notifications):(changes.newOrderNotifications?1:0);
+    const rate=changes.rateNotifications===undefined?Number(user.rate_notifications):(changes.rateNotifications?1:0);
+    const nudges=changes.orderNudges===undefined?Number(user.order_nudges):(changes.orderNudges?1:0);
+    const reminders=changes.shiftReminderNotifications===undefined?Number(user.shift_reminder_notifications):(changes.shiftReminderNotifications?1:0);
+    this.db.prepare("UPDATE users SET work_time_preference=?,dnd_enabled=?,dnd_start=?,dnd_end=?,notifications=?,rate_notifications=?,order_nudges=?,shift_reminder_notifications=?,updated_at=? WHERE telegram_id=?").run(preference,dndEnabled,dndStart,dndEnd,newOrders,rate,nudges,reminders,now(),String(userId));
+    this.audit(userId,'worker.preferences','user',userId,{preference,dndEnabled,dndStart,dndEnd,newOrders,rate,nudges,reminders});
+    return this.getUser(userId);
+  }
+  setAllNotifications(userId,enabled){const value=enabled?1:0;this.db.prepare("UPDATE users SET notifications=?,rate_notifications=?,order_nudges=?,shift_reminder_notifications=?,updated_at=? WHERE telegram_id=?").run(value,value,value,value,now(),String(userId));return this.getUser(userId);}
+  recordWorkerOrderEvent(userId,orderId,event){
+    if(!['seen','opened','applied'].includes(event))return false;
+    const result=this.db.prepare("INSERT OR IGNORE INTO worker_order_events(user_id,order_id,event,created_at) VALUES(?,?,?,?)").run(String(userId),Number(orderId),event,now());
+    return Number(result.changes||0)>0;
+  }
+  getWorkerFunnel(userId){
+    const id=String(userId);
+    const eventCount=event=>num(this.db.prepare("SELECT COUNT(*) count FROM worker_order_events WHERE user_id=? AND event=?").get(id,event).count);
+    const completed=num(this.db.prepare("SELECT COUNT(*) count FROM shifts s JOIN worker_order_events e ON e.user_id=s.user_id AND e.order_id=s.order_id AND e.event='applied' WHERE s.user_id=? AND s.status='completed'").get(id).count);
+    return {seen:eventCount('seen'),opened:eventCount('opened'),applied:eventCount('applied'),completed};
+  }
   updateWorkerSettings(userId,changes={}){
     const user=this.getUser(userId);if(!user||user.role!=='worker')return null;
     const frequency=changes.autoOrdersPerHour===undefined?Number(user.auto_orders_per_hour):Math.min(60,Math.max(0,Number(changes.autoOrdersPerHour)||0));
@@ -353,7 +395,7 @@ export class BotDatabase {
   applyToOrder(orderId,userId){
     const order=this.getOrder(orderId);if(!order||order.status!=='active'||(order.target_user_id&&order.target_user_id!==String(userId)))return {error:'closed'};
     const user=this.getUser(userId);if(!user||user.status!=='active'||user.role!=='worker'||user.verified!==1||!user.region)return {error:'access'};
-    try{const stamp=now();const result=this.db.prepare("INSERT INTO applications(order_id,user_id,status,created_at,updated_at) VALUES(?,?,'pending',?,?)").run(orderId,String(userId),stamp,stamp);const id=num(result.lastInsertRowid);this.audit(userId,'application.create','application',id,{orderId});return {application:this.getApplication(id)};}catch(error){if(String(error).includes('UNIQUE'))return {error:'duplicate'};throw error;}
+    try{const stamp=now();const result=this.db.prepare("INSERT INTO applications(order_id,user_id,status,created_at,updated_at) VALUES(?,?,'pending',?,?)").run(orderId,String(userId),stamp,stamp);const id=num(result.lastInsertRowid);this.recordWorkerOrderEvent(userId,orderId,'applied');this.audit(userId,'application.create','application',id,{orderId});return {application:this.getApplication(id)};}catch(error){if(String(error).includes('UNIQUE'))return {error:'duplicate'};throw error;}
   }
   getApplication(id){return this.db.prepare(`SELECT a.*,o.title,o.city,o.address,o.starts_at,o.duration_hours,o.amount,o.people_needed,o.self_employed_rate,o.ip_rate,u.username,u.first_name,u.last_name,u.phone,u.contractor_type FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.id=?`).get(id);}
   listPendingApplications(limit=30){return this.db.prepare(`SELECT a.*,o.title,o.city,o.starts_at,o.duration_hours,o.amount,o.self_employed_rate,o.ip_rate,u.username,u.first_name,u.last_name,u.phone,u.contractor_type FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.status='pending' ORDER BY a.created_at LIMIT ?`).all(limit);}
