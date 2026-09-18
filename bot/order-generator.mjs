@@ -18,6 +18,8 @@ export class OrderGenerator{
     this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
     this.ordersPerHour=Math.max(.1,Number(process.env.BOT_AUTO_ORDERS_PER_HOUR)||1.5);
     this.maxActive=Math.max(1,Number(process.env.BOT_AUTO_ORDER_MAX_ACTIVE)||3);
+    this.startupTarget=Math.min(3,this.maxActive);
+    this.seededRegions=new Set();
     this.urgentChance=Math.min(.9,Math.max(0,Number(process.env.BOT_URGENT_ORDER_CHANCE)||.35));
   }
 
@@ -32,9 +34,22 @@ export class OrderGenerator{
       return;
     }
     for(const region of workerRegions){
-      const active=this.db.countActiveGeneratedOrders(region);
-      const shouldCreate=active===0||Math.random()<this.ordersPerHour/60;
-      if(active<this.maxActive&&shouldCreate){
+      let active=this.db.countActiveGeneratedOrders(region);
+
+      if(!this.seededRegions.has(region)){
+        const missing=Math.max(0,this.startupTarget-active);
+        for(let i=0;i<missing;i++){
+          const order=await this.createOrder(region,managerId);
+          if(!order)break;
+          active++;
+          await this.app.publishGeneratedOrder(order);
+          this.log.log?.(`Стартовый автозаказ №${order.id} создан: ${order.city}${order.urgent?' (срочный)':''}`);
+        }
+        if(active>=this.startupTarget)this.seededRegions.add(region);
+        continue;
+      }
+
+      if(active<this.maxActive&&Math.random()<this.ordersPerHour/60){
         const order=await this.createOrder(region,managerId);
         if(!order)continue;
         await this.app.publishGeneratedOrder(order);
