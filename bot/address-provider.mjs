@@ -20,6 +20,17 @@ export class AddressProvider{
     return response.json();
   }
 
+  async geocodeAddress(address,city=''){
+    const query=[address,city,'Россия'].filter(Boolean).join(', ');if(String(address||'').trim().length<3)return null;
+    const wait=Math.max(0,1100-(Date.now()-this.lastNominatimAt));if(wait)await sleep(wait);
+    const params=new URLSearchParams({format:'jsonv2',countrycodes:'ru',limit:'1',q:query});
+    try{
+      const list=await this.requestJson(`${this.nominatimUrl}/search?${params}`);this.lastNominatimAt=Date.now();
+      const item=Array.isArray(list)?list[0]:null,latitude=Number(item?.lat),longitude=Number(item?.lon);
+      return Number.isFinite(latitude)&&Number.isFinite(longitude)?{latitude,longitude}:null;
+    }catch(error){this.log.warn?.('Не удалось определить координаты адреса через Nominatim:',error.message);return null;}
+  }
+
   async resolveRegion(query){
     const key=this.normalize(query);if(key.length<2)return null;
     const cached=this.db.getRegionGeo(key);if(cached)return cached;
