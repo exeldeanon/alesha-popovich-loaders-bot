@@ -85,7 +85,13 @@ export class BotApp{
     const chatId=message.chat.id;
     const text=String(message.text||'').trim();
     if(this.isWorker(user)){
-      this.db.logWorkerAction(user.telegram_id,message.location?'location':'message',{text:message.location?'Отправил геопозицию':(text||'[без текста]')});
+      const action=message.location?'location':message.contact?'contact':message.photo?'photo':message.document?'document':message.voice?'voice':message.video?'video':message.sticker?'sticker':text.startsWith('/')?'command':'message';
+      this.db.logWorkerAction(user.telegram_id,action,{
+        text:text||undefined,
+        messageId:message.message_id,
+        contact:Boolean(message.contact),
+        location:Boolean(message.location),
+      });
       if(user.maintenance_mode===1)return this.safeSend(chatId,'🛠 <b>Сейчас идут технические работы.</b>\nБот временно недоступен. Попробуйте позже.',{reply_markup:this.menuFor(user)});
     }
     if(message.location&&this.isWorker(user))return this.menu(chatId,user,'Геопозиция больше не требуется. Откройте активный заказ и нажмите «🗺 Посмотреть на карте».');
@@ -103,16 +109,24 @@ export class BotApp{
   async start(chatId,user){
     this.db.clearSession(user.telegram_id);
     if(this.isManager(user))return this.menu(chatId,user,'<b>Панель менеджера «Алёша Попович»</b>');
-    if(this.isVerifiedWorker(user))return this.menu(chatId,user,`С возвращением, ${e(user.first_name||'коллега')}!`);
-    if(this.hasBotAccess(user))return this.menu(chatId,user,[
-      `С возвращением, ${e(user.first_name||'коллега')}!`,
-      'Статус: <b>Не верифицирован</b>.',
-      'Заказы доступны для просмотра. Чтобы откликаться и брать их, запросите верификацию у менеджера.',
+    if(this.isVerifiedWorker(user))return this.menu(chatId,user,[
+      `<b>👋 Добро пожаловать, ${e(user.first_name||'коллега')}!</b>`,
+      'Здесь можно быстро смотреть активные заказы, откликаться и контролировать выплаты.',
+      '',
+      '⚙️ В разделе <b>«Настройки»</b> всё гибко настраивается под вас: время работы, режим «Не беспокоить» и каждый тип уведомлений отдельно.',
     ].join('\n'));
-    if(user.status==='pending')return this.safeSend(chatId,'<b>Заявка на доступ к боту уже у менеджера.</b>\nОжидайте решения.',{reply_markup:removeKeyboard()});
+    if(this.hasBotAccess(user))return this.menu(chatId,user,[
+      `<b>👋 Добро пожаловать, ${e(user.first_name||'коллега')}!</b>`,
+      'Статус: <b>Не верифицирован</b>.',
+      'Заказы уже доступны для просмотра. Чтобы откликаться и брать их, запросите верификацию у менеджера.',
+      '',
+      '⚙️ В «Настройках» можно заранее настроить уведомления и режим «Не беспокоить».',
+    ].join('\n'));
+    if(user.status==='pending')return this.safeSend(chatId,'<b>👋 Добро пожаловать!</b>\nЗаявка на доступ к боту уже у менеджера. Ожидайте решения.',{reply_markup:removeKeyboard()});
     return this.safeSend(chatId,[
-      '<b>Работа грузчиком в «Алёша Попович»</b>',
-      'Для начала нужно получить доступ к боту у менеджера.',
+      '<b>👋 Добро пожаловать в «Алёша Попович»!</b>',
+      'Здесь грузчики находят заказы, смотрят адрес и оплату, откликаются и получают выплаты.',
+      'После выдачи доступа появятся гибкие настройки уведомлений и рабочего времени.',
       '',`Ваш Telegram ID: <code>${e(user.telegram_id)}</code>`,
     ].join('\n'),{reply_markup:inline([[{text:'🔑 Запросить доступ',callback_data:'access_start'}]])});
   }
@@ -138,7 +152,8 @@ export class BotApp{
       if(!this.hasBotAccess(user))return this.start(chatId,user);
       if(text==='🔑 Запросить верификацию')return this.requestVerification(chatId,user);
       if(text==='➕ Создать заказ'){if(!this.canCreateOrder(user))return this.menu(chatId,user,'⛔ Создание заказов для вашего аккаунта отключено менеджером.');return this.beginOrder(chatId,user);}
-      if(text==='💰 Личный кабинет'){const geo=this.db.getRegionGeo(user.region);return this.safeSend(chatId,cabinetText({...user,region:geo?.label||regionLabel(user.region)},this.db.getCabinet(user.telegram_id)),{reply_markup:this.menuFor(user)});}
+      if(text==='💰 Личный кабинет')return this.showCabinet(chatId,user);
+      if(text==='⚙️ Настройки')return this.showUserSettings(chatId,user);
       if(text==='📦 Активные заказы')return this.showOrders(chatId,user);
       if(text==='🗓 Мои смены'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Смены доступны после верификации у менеджера.');return this.showShifts(chatId,user,false);}
       if(text==='📜 История смен'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ История смен доступна после верификации у менеджера.');return this.showShifts(chatId,user,true);}
