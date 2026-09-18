@@ -269,7 +269,7 @@ export class BotApp{
     const orders=this.isVerifiedWorker(user)?this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city,userId:user.telegram_id}):this.db.listActiveOrders({userId:user.telegram_id});if(!orders.length)return this.menu(chatId,user,'Сейчас активных заказов нет.');
     await this.safeSend(chatId,`<b>Активные заказы: ${orders.length}</b>`,{reply_markup:this.menuFor(user)});
     const apps=this.isVerifiedWorker(user)?new Map(this.db.listUserApplications(user.telegram_id,50).map(item=>[item.order_id,item])):new Map();
-    for(const order of orders){const app=apps.get(order.id);await this.safeSend(chatId,orderText(order,{worker:user}),{reply_markup:this.isVerifiedWorker(user)?orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id}):this.menuFor(user)});}
+    for(const order of orders){const app=apps.get(order.id);await this.safeSend(chatId,orderText(order,{worker:user}),{reply_markup:orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id,canApply:this.isVerifiedWorker(user)})});}
   }
   async showManagedOrders(chatId){const list=this.db.listManagedOrders();if(!list.length)return this.safeSend(chatId,'Активных заказов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,orderText(item,{manager:true}),{reply_markup:orderKeyboard(item,{manager:true})});}
   async showWorkers(chatId){
