@@ -91,7 +91,7 @@ export function applicationText(item){return [
 export function accessText(item){return [
   `<b>🔑 Запрос доступа №${item.id}</b>`,
   `Имя: ${e(item.name)}`,
-  `Город: ${e(item.city)}`,
+  item.city?`Город: ${e(item.city)}`:null,
   item.experience?`Опыт: ${e(short(item.experience,500))}`:null,
   item.username?`Telegram: @${e(item.username)}`:`Telegram ID: <code>${e(item.user_id)}</code>`,
 ].filter(Boolean).join('\n');}
