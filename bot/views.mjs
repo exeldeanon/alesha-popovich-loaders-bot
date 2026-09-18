@@ -61,7 +61,6 @@ export function orderText(order,{manager=false,assigned=false,worker=null,distan
     `👥 Свободно мест: ${places} из ${order.people_needed}`,
     manager&&simulated?`🧪 Демо-заполнение: ${simulated}; реальных назначено: ${real}`:null,
     order.description?`\n${e(short(order.description,500))}`:null,
-    order.generated?'🗺 Геоданные: © OpenStreetMap contributors':null,
   ].filter(Boolean).join('\n');
 }
 
