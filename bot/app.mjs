@@ -8,8 +8,8 @@ const decisionKeyboard=(kind,id,yes='Одобрить',no='Отклонить')=
 ]]);
 
 export class BotApp{
-  constructor({db,telegram,logger=console,adminUsernames=[]}){
-    this.db=db;this.tg=telegram;this.log=logger;
+  constructor({db,telegram,addressProvider=null,logger=console,adminUsernames=[]}){
+    this.db=db;this.tg=telegram;this.addressProvider=addressProvider;this.log=logger;
     this.adminUsernames=new Set(adminUsernames.map(value=>String(value).replace(/^@/,'').toLowerCase()).filter(Boolean));
   }
 
@@ -118,6 +118,7 @@ export class BotApp{
     if(session.flow==='order'&&this.isManager(user))return this.orderSession(message,user,session,text);
     if(session.flow==='withdrawal'&&this.isWorker(user))return this.withdrawalSession(message,user,text);
     if(session.flow==='shift_edit'&&this.isManager(user))return this.shiftEditSession(message,user,session,text);
+    if(session.flow==='worker_region'&&this.isManager(user))return this.workerRegionSession(message,user,session,text);
     this.db.clearSession(user.telegram_id);return this.start(message.chat.id,user);
   }
 
@@ -163,6 +164,16 @@ export class BotApp{
   async withdrawalSession(message,user,text){
     const amount=int(text,{min:1,max:10_000_000});if(amount==null)return this.safeSend(message.chat.id,'Введите сумму целым числом.');
     return this.createWithdrawal(message.chat.id,user,amount);
+  }
+  async workerRegionSession(message,user,session,text){
+    const chatId=message.chat.id;
+    if(text.length<2)return this.safeSend(chatId,'Введите город, область, край или республику России.');
+    const geo=await this.addressProvider?.resolveRegion(text);
+    if(!geo)return this.safeSend(chatId,'Не удалось найти такой регион или город в России. Проверьте написание и попробуйте ещё раз.');
+    const worker=this.db.updateWorkerProfile(session.data.workerId,{region:geo.region_key});
+    this.db.clearSession(user.telegram_id);
+    const name=worker?.first_name||worker?.username||worker?.telegram_id||'Грузчик';
+    return this.menu(chatId,user,worker?`Регион для ${e(name)}: <b>${e(geo.label)}</b>.`:'Грузчик не найден.');
   }
 
   async shiftEditSession(message,user,session,text){
