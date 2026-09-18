@@ -64,6 +64,15 @@ export class BotDatabase {
         decided_by TEXT REFERENCES users(telegram_id)
       );
       CREATE INDEX IF NOT EXISTS idx_access_status ON access_requests(status,created_at);
+      CREATE TABLE IF NOT EXISTS verification_requests(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(telegram_id),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','declined')),
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT REFERENCES users(telegram_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_verification_status ON verification_requests(status,created_at);
       CREATE TABLE IF NOT EXISTS orders(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
@@ -233,22 +242,44 @@ export class BotDatabase {
   }
   getAccessRequest(id){return this.db.prepare('SELECT ar.*,u.username,u.first_name FROM access_requests ar JOIN users u ON u.telegram_id=ar.user_id WHERE ar.id=?').get(id);}
   listPendingAccess(limit=20){return this.db.prepare("SELECT ar.*,u.username,u.first_name FROM access_requests ar JOIN users u ON u.telegram_id=ar.user_id WHERE ar.status='pending' ORDER BY ar.created_at LIMIT ?").all(limit);}
-  declineAccess(id,managerId){
+  decideAccess(id,managerId,approved){
     return this.transaction(()=>{
       const request=this.getAccessRequest(id);if(!request||request.status!=='pending')return null;
-      this.db.prepare("UPDATE access_requests SET status='declined',decided_at=?,decided_by=? WHERE id=?").run(now(),String(managerId),id);
-      this.db.prepare("UPDATE users SET status='new',role='worker',verified=0,region='',updated_at=? WHERE telegram_id=?").run(now(),request.user_id);
-      this.audit(managerId,'access.declined','access_request',id,{userId:request.user_id});
+      const status=approved?'approved':'declined';
+      this.db.prepare('UPDATE access_requests SET status=?,decided_at=?,decided_by=? WHERE id=?').run(status,now(),String(managerId),id);
+      this.db.prepare("UPDATE users SET status=?,role='worker',verified=0,region='',updated_at=? WHERE telegram_id=?").run(approved?'active':'new',now(),request.user_id);
+      this.audit(managerId,`access.${status}`,'access_request',id,{userId:request.user_id});
+      return {...request,status};
+    });
+  }
+
+  createVerificationRequest(userId){
+    const user=this.getUser(userId);
+    if(!user||user.role!=='worker'||user.status!=='active')return {error:'access'};
+    if(user.verified===1)return {error:'verified'};
+    const pending=this.db.prepare("SELECT * FROM verification_requests WHERE user_id=? AND status='pending' ORDER BY id DESC LIMIT 1").get(String(userId));
+    if(pending)return {error:'pending',request:this.getVerificationRequest(pending.id)};
+    const result=this.db.prepare("INSERT INTO verification_requests(user_id,status,created_at) VALUES(?,'pending',?)").run(String(userId),now());
+    const id=num(result.lastInsertRowid);this.audit(userId,'verification.request','verification_request',id);
+    return {request:this.getVerificationRequest(id)};
+  }
+  getVerificationRequest(id){return this.db.prepare('SELECT vr.*,u.username,u.first_name,u.last_name,u.city FROM verification_requests vr JOIN users u ON u.telegram_id=vr.user_id WHERE vr.id=?').get(id);}
+  listPendingVerifications(limit=20){return this.db.prepare("SELECT vr.*,u.username,u.first_name,u.last_name,u.city FROM verification_requests vr JOIN users u ON u.telegram_id=vr.user_id WHERE vr.status='pending' ORDER BY vr.created_at LIMIT ?").all(limit);}
+  declineVerification(id,managerId){
+    return this.transaction(()=>{
+      const request=this.getVerificationRequest(id);if(!request||request.status!=='pending')return null;
+      this.db.prepare("UPDATE verification_requests SET status='declined',decided_at=?,decided_by=? WHERE id=?").run(now(),String(managerId),id);
+      this.audit(managerId,'verification.declined','verification_request',id,{userId:request.user_id});
       return {...request,status:'declined'};
     });
   }
-  completeAccessVerification(id,managerId,{region,contractorType}){
+  completeVerification(id,managerId,{region,contractorType}){
     if(!region||!['self_employed','ip'].includes(contractorType))return null;
     return this.transaction(()=>{
-      const request=this.getAccessRequest(id);if(!request||request.status!=='pending')return null;
-      this.db.prepare("UPDATE access_requests SET status='approved',decided_at=?,decided_by=? WHERE id=?").run(now(),String(managerId),id);
-      this.db.prepare("UPDATE users SET status='active',role='worker',verified=1,region=?,contractor_type=?,updated_at=? WHERE telegram_id=?").run(String(region),String(contractorType),now(),request.user_id);
-      this.audit(managerId,'access.approved','access_request',id,{userId:request.user_id,region,contractorType});
+      const request=this.getVerificationRequest(id);if(!request||request.status!=='pending')return null;
+      this.db.prepare("UPDATE verification_requests SET status='approved',decided_at=?,decided_by=? WHERE id=?").run(now(),String(managerId),id);
+      this.db.prepare("UPDATE users SET verified=1,region=?,contractor_type=?,updated_at=? WHERE telegram_id=? AND status='active' AND role='worker'").run(String(region),String(contractorType),now(),request.user_id);
+      this.audit(managerId,'verification.approved','verification_request',id,{userId:request.user_id,region,contractorType});
       return {...request,status:'approved',region,contractor_type:contractorType};
     });
   }
@@ -340,5 +371,5 @@ export class BotDatabase {
   setSetting(key,value){this.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(value));}
   markNotification(kind,entityId,userId){try{this.db.prepare('INSERT INTO notifications_sent(kind,entity_id,user_id,sent_at) VALUES(?,?,?,?)').run(kind,String(entityId),String(userId),now());return true;}catch(error){if(String(error).includes('UNIQUE'))return false;throw error;}}
   remindersDue(beforeIso){return this.db.prepare(`SELECT s.id,s.user_id,o.title,o.city,o.address,o.starts_at FROM shifts s JOIN orders o ON o.id=s.order_id LEFT JOIN notifications_sent n ON n.kind='shift_reminder' AND n.entity_id=CAST(s.id AS TEXT) AND n.user_id=s.user_id WHERE s.status='assigned' AND o.starts_at>? AND o.starts_at<=? AND n.entity_id IS NULL ORDER BY o.starts_at`).all(now(),beforeIso);}
-  stats(){return {workers:num(this.db.prepare("SELECT COUNT(*) count FROM users WHERE role='worker' AND status='active' AND verified=1").get().count),activeOrders:num(this.db.prepare("SELECT COUNT(*) count FROM orders WHERE status IN ('active','filled')").get().count),pendingAccess:num(this.db.prepare("SELECT COUNT(*) count FROM access_requests WHERE status='pending'").get().count),pendingApplications:num(this.db.prepare("SELECT COUNT(*) count FROM applications WHERE status='pending'").get().count),pendingShifts:num(this.db.prepare("SELECT COUNT(*) count FROM shifts WHERE status='pending_confirmation'").get().count),pendingWithdrawals:num(this.db.prepare("SELECT COUNT(*) count FROM withdrawals WHERE status='pending'").get().count),paidTotal:num(this.db.prepare("SELECT COALESCE(SUM(amount),0) total FROM withdrawals WHERE status='paid'").get().total)};}
+  stats(){return {workers:num(this.db.prepare("SELECT COUNT(*) count FROM users WHERE role='worker' AND status='active' AND verified=1").get().count),activeOrders:num(this.db.prepare("SELECT COUNT(*) count FROM orders WHERE status IN ('active','filled')").get().count),pendingAccess:num(this.db.prepare("SELECT COUNT(*) count FROM access_requests WHERE status='pending'").get().count),pendingVerification:num(this.db.prepare("SELECT COUNT(*) count FROM verification_requests WHERE status='pending'").get().count),pendingApplications:num(this.db.prepare("SELECT COUNT(*) count FROM applications WHERE status='pending'").get().count),pendingShifts:num(this.db.prepare("SELECT COUNT(*) count FROM shifts WHERE status='pending_confirmation'").get().count),pendingWithdrawals:num(this.db.prepare("SELECT COUNT(*) count FROM withdrawals WHERE status='pending'").get().count),paidTotal:num(this.db.prepare("SELECT COALESCE(SUM(amount),0) total FROM withdrawals WHERE status='paid'").get().total)};}
 }
