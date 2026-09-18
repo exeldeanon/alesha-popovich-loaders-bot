@@ -17,7 +17,7 @@ export class OrderGenerator{
     this.enabled=process.env.BOT_AUTO_ORDERS!=='0';
     this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
     this.ordersPerHour=Math.max(.1,Number(process.env.BOT_AUTO_ORDERS_PER_HOUR)||1.5);
-    this.maxActive=Math.max(3,Number(process.env.BOT_AUTO_ORDER_MAX_ACTIVE)||7);
+    this.maxActive=7;
     this.startupTargets=new Map();
     this.seededRegions=new Set();
     this.urgentChance=Math.min(.9,Math.max(0,Number(process.env.BOT_URGENT_ORDER_CHANCE)||.35));
