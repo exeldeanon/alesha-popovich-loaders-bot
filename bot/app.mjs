@@ -364,9 +364,22 @@ export class BotApp{
   }
 
   workerOrders(user){
-    return this.isVerifiedWorker(user)
+    const orders=this.isVerifiedWorker(user)
       ?this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city,userId:user.telegram_id,limit:100})
       :this.db.listActiveOrders({userId:user.telegram_id,limit:100});
+    const preference=user.work_time_preference||'any';
+    if(preference==='any')return orders;
+    const bucket=order=>{
+      const hour=Number(new Intl.DateTimeFormat('en-GB',{hour:'2-digit',hourCycle:'h23',timeZone:'Europe/Moscow'}).format(new Date(order.starts_at)));
+      if(hour>=6&&hour<12)return 'morning';
+      if(hour>=12&&hour<18)return 'day';
+      if(hour>=18)return 'evening';
+      return 'night';
+    };
+    return [...orders].sort((a,b)=>{
+      const am=bucket(a)===preference?0:1,bm=bucket(b)===preference?0:1;
+      return am-bm||new Date(a.starts_at)-new Date(b.starts_at);
+    });
   }
 
   async showOrders(chatId,user,{page=0,messageId=null}={}){
@@ -383,6 +396,8 @@ export class BotApp{
       'Выберите заказ. В каждой кнопке: адрес и ориентир выплаты.',
       '🔥 — срочный заказ.',
     ].join('\n');
+    const visible=orders.slice(safePage*5,safePage*5+5);
+    for(const order of visible)this.db.recordWorkerOrderEvent(user.telegram_id,order.id,'seen');
     const options={reply_markup:orderListKeyboard(orders,user,{page:safePage,pageSize:5})};
     if(messageId){
       try{return await this.tg.editMessage(chatId,messageId,text,options);}
@@ -395,6 +410,7 @@ export class BotApp{
     const orders=this.workerOrders(user);
     const order=orders.find(item=>Number(item.id)===Number(orderId));
     if(!order)return this.showOrders(chatId,user,{page,messageId});
+    this.db.recordWorkerOrderEvent(user.telegram_id,order.id,'opened');
     const apps=this.isVerifiedWorker(user)?new Map(this.db.listUserApplications(user.telegram_id,100).map(item=>[item.order_id,item])):new Map();
     const app=apps.get(order.id);
     const options={reply_markup:orderKeyboard(order,{
