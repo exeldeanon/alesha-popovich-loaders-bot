@@ -4,7 +4,6 @@ export const workerMenu=reply([
   ['📦 Активные заказы','🗓 Мои смены'],
   ['💰 Личный кабинет','📜 История смен'],
   ['💸 Запросить выплату','🔔 Уведомления'],
-  [{text:'📍 Обновить геопозицию',request_location:true}],
   ['🆘 Помощь'],
 ]);
 
@@ -13,7 +12,6 @@ export const workerCreatorMenu=reply([
   ['➕ Создать заказ'],
   ['💰 Личный кабинет','📜 История смен'],
   ['💸 Запросить выплату','🔔 Уведомления'],
-  [{text:'📍 Обновить геопозицию',request_location:true}],
   ['🆘 Помощь'],
 ]);
 
@@ -43,7 +41,7 @@ export const managerMenu=reply([
   ['🆘 Помощь'],
 ]);
 
-export function orderText(order,{manager=false,assigned=false,worker=null,distanceKm=null}={}){
+export function orderText(order,{manager=false,assigned=false,worker=null}={}){
   const real=Number(order.assigned_count||0),simulated=Number(order.simulated_assigned||0);
   const occupied=real+simulated;
   const places=Math.max(0,Number(order.people_needed)-occupied);
@@ -55,14 +53,13 @@ export function orderText(order,{manager=false,assigned=false,worker=null,distan
   const ipTotal=Math.round(ipRate*duration);
   const workerRate=contractorType==='ip'?ipRate:selfRate;
   const workerTotal=contractorType==='ip'?ipTotal:selfTotal;
-  const distance=Number.isFinite(Number(distanceKm))?` · примерно ${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1}).format(Number(distanceKm))} км от вас`:'';
   const targetName=[order.target_first_name,order.target_last_name].filter(Boolean).join(' ')||order.target_user_id;
   return [
     order.urgent?'<b>🔥 СРОЧНЫЙ ЗАКАЗ</b>':null,
     `<b>📦 Заказ №${order.id}: ${e(order.title)}</b>`,
     manager&&order.target_user_id?`🎯 Персональный автозаказ для: ${e(targetName)}${order.target_username?` (@${e(order.target_username)})`:''}`:null,
     `📍 ${e(order.city)}`,
-    order.address?`🏠 ${e(order.address)}${distance}`:null,
+    order.address?`🏠 ${e(order.address)}`:null,
     `🕒 ${formatDate(order.starts_at)}`,
     `⏱ Ориентир: ${hours(order.duration_hours)}`,
     manager?`💰 Самозанятые: ${money(selfRate)}/ч · ориентир ${money(selfTotal)}`:null,
@@ -75,13 +72,22 @@ export function orderText(order,{manager=false,assigned=false,worker=null,distan
   ].filter(Boolean).join('\n');
 }
 
+const orderMapUrl=order=>{
+  const lat=Number(order.latitude),lon=Number(order.longitude);
+  if(Number.isFinite(lat)&&Number.isFinite(lon))return `https://yandex.ru/maps/?ll=${encodeURIComponent(`${lon},${lat}`)}&z=16&pt=${encodeURIComponent(`${lon},${lat}`)}`;
+  const query=[order.address,order.city].filter(Boolean).join(', ');
+  return `https://yandex.ru/maps/?text=${encodeURIComponent(query)}`;
+};
+
 export function orderKeyboard(order,{manager=false,applied=false,applicationId=null}={}){
+  const mapButton={text:'🗺 Посмотреть на карте',url:orderMapUrl(order)};
   if(manager)return inline([
+    [mapButton],
     [{text:'📨 Отклики',callback_data:`order_apps:${order.id}`}],
     [{text:'✅ Закрыть',callback_data:`order_status:${order.id}:closed`},{text:'⛔ Отменить',callback_data:`order_status:${order.id}:cancelled`}],
   ]);
-  if(applied)return inline([[{text:'Отозвать отклик',callback_data:`application_withdraw:${applicationId}`}]]);
-  return inline([[{text:'Откликнуться',callback_data:`order_apply:${order.id}`}]]);
+  if(applied)return inline([[mapButton],[{text:'Отозвать отклик',callback_data:`application_withdraw:${applicationId}`}]]);
+  return inline([[mapButton],[{text:'Откликнуться',callback_data:`order_apply:${order.id}`}]]);
 }
 
 export function workerProfileText(user){return [
