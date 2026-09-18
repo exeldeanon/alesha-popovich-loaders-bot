@@ -164,6 +164,11 @@ export class BotDatabase {
     addColumn('users','latitude',"REAL");
     addColumn('users','longitude',"REAL");
     addColumn('users','location_updated_at',"TEXT");
+    addColumn('users','auto_orders_per_hour',"REAL NOT NULL DEFAULT 1.5");
+    addColumn('users','urgent_order_chance',"REAL NOT NULL DEFAULT 0.35");
+    addColumn('users','can_create_orders',"INTEGER NOT NULL DEFAULT 0 CHECK(can_create_orders IN (0,1))");
+    addColumn('users','maintenance_mode',"INTEGER NOT NULL DEFAULT 0 CHECK(maintenance_mode IN (0,1))");
+    addColumn('users','action_logging',"INTEGER NOT NULL DEFAULT 0 CHECK(action_logging IN (0,1))");
     this.db.prepare("UPDATE users SET verified=1 WHERE status='active' AND (role='manager' OR (role='worker' AND region<>''))").run();
     addColumn('orders','region',"TEXT NOT NULL DEFAULT ''");
     addColumn('orders','self_employed_rate',"INTEGER NOT NULL DEFAULT 450");
@@ -173,6 +178,7 @@ export class BotDatabase {
     addColumn('orders','simulated_assigned',"INTEGER NOT NULL DEFAULT 0");
     addColumn('orders','latitude',"REAL");
     addColumn('orders','longitude',"REAL");
+    addColumn('orders','target_user_id',"TEXT NOT NULL DEFAULT ''");
     addColumn('shifts','planned_amount',"INTEGER");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS order_messages(
@@ -226,16 +232,30 @@ export class BotDatabase {
       ON CONFLICT(telegram_id) DO UPDATE SET role='manager',status='active',updated_at=excluded.updated_at`).run(key,stamp,stamp,stamp);
   }
   getUser(id){return this.db.prepare('SELECT * FROM users WHERE telegram_id=?').get(String(id));}
-  listActiveWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 ORDER BY created_at").all();}
-  listActiveWorkersByRegion(region){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 AND region=? ORDER BY created_at").all(String(region||''));}
+  listActiveWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 AND maintenance_mode=0 ORDER BY created_at").all();}
+  listActiveWorkersByRegion(region){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 AND maintenance_mode=0 AND region=? ORDER BY created_at").all(String(region||''));}
   listActiveWorkerRegions(){return this.db.prepare("SELECT DISTINCT region FROM users WHERE role='worker' AND status='active' AND verified=1 AND region<>'' ORDER BY region").all().map(row=>row.region);}
   listAutoOrderRegions(){return this.db.prepare("SELECT DISTINCT region FROM users WHERE role='worker' AND status='active' AND region<>'' ORDER BY region").all().map(row=>row.region);}
+  listAutoOrderWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND region<>'' ORDER BY created_at").all();}
   listWorkers(limit=100){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' ORDER BY verified ASC,first_name,last_name,created_at LIMIT ?").all(limit);}
   updateWorkerProfile(userId,{region,contractorType,verified}){const user=this.getUser(userId);if(!user)return null;const nextRegion=region===undefined?user.region:String(region||'');const nextType=contractorType===undefined?user.contractor_type:String(contractorType);const nextVerified=verified===undefined?user.verified:(verified?1:0);if(!['self_employed','ip'].includes(nextType))throw Error('Invalid contractor type');this.db.prepare("UPDATE users SET region=?,contractor_type=?,verified=?,updated_at=? WHERE telegram_id=?").run(nextRegion,nextType,nextVerified,now(),String(userId));this.audit(null,'worker.profile','user',userId,{region:nextRegion,contractorType:nextType,verified:nextVerified});return this.getUser(userId);}
   verifyWorker(userId,managerId,{region,contractorType}){if(!region||!['self_employed','ip'].includes(contractorType))return null;this.db.prepare("UPDATE users SET status='active',role='worker',verified=1,region=?,contractor_type=?,updated_at=? WHERE telegram_id=?").run(String(region),String(contractorType),now(),String(userId));this.audit(managerId,'worker.verify','user',userId,{region,contractorType});return this.getUser(userId);}
   listManagers(){return this.db.prepare("SELECT * FROM users WHERE role='manager' AND status='active'").all();}
   getGeneratorManagerId(){return this.listManagers()[0]?.telegram_id||null;}
   toggleNotifications(id){this.db.prepare('UPDATE users SET notifications=1-notifications,updated_at=? WHERE telegram_id=?').run(now(),String(id));return this.getUser(id);}
+  updateWorkerSettings(userId,changes={}){
+    const user=this.getUser(userId);if(!user||user.role!=='worker')return null;
+    const frequency=changes.autoOrdersPerHour===undefined?Number(user.auto_orders_per_hour):Math.min(60,Math.max(0,Number(changes.autoOrdersPerHour)||0));
+    const urgent=changes.urgentOrderChance===undefined?Number(user.urgent_order_chance):Math.min(.9,Math.max(0,Number(changes.urgentOrderChance)||0));
+    const canCreate=changes.canCreateOrders===undefined?Number(user.can_create_orders):(changes.canCreateOrders?1:0);
+    const maintenance=changes.maintenanceMode===undefined?Number(user.maintenance_mode):(changes.maintenanceMode?1:0);
+    const logging=changes.actionLogging===undefined?Number(user.action_logging):(changes.actionLogging?1:0);
+    this.db.prepare("UPDATE users SET auto_orders_per_hour=?,urgent_order_chance=?,can_create_orders=?,maintenance_mode=?,action_logging=?,updated_at=? WHERE telegram_id=?").run(frequency,urgent,canCreate,maintenance,logging,now(),String(userId));
+    this.audit(null,'worker.settings','user',userId,{autoOrdersPerHour:frequency,urgentOrderChance:urgent,canCreateOrders:canCreate,maintenanceMode:maintenance,actionLogging:logging});
+    return this.getUser(userId);
+  }
+  logWorkerAction(userId,action,details={}){const user=this.getUser(userId);if(!user||user.action_logging!==1)return false;this.audit(userId,`worker.ui.${action}`,'user',userId,details);return true;}
+  listWorkerActionLogs(userId,limit=20){return this.db.prepare("SELECT * FROM audit_log WHERE actor_id=? AND action LIKE 'worker.ui.%' ORDER BY id DESC LIMIT ?").all(String(userId),limit);}
   updateUserLocation(id,{latitude,longitude}){const lat=Number(latitude),lon=Number(longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat < -90||lat > 90||lon < -180||lon > 180)return null;this.db.prepare('UPDATE users SET latitude=?,longitude=?,location_updated_at=?,updated_at=? WHERE telegram_id=?').run(lat,lon,now(),now(),String(id));return this.getUser(id);}
 
   createAccessRequest(userId,{name,city,experience}){
@@ -295,34 +315,39 @@ export class BotDatabase {
     const stamp=now(),duration=Number(data.durationHours)||1;
     const selfRate=Number(data.selfEmployedRate)||Math.max(1,Math.round((Number(data.amount)||0)/duration))||450;
     const ipRate=Math.max(550,Number(data.ipRate)||selfRate+100);
-    const result=this.db.prepare(`INSERT INTO orders(title,city,address,starts_at,duration_hours,people_needed,amount,description,status,created_by,created_at,updated_at,region,self_employed_rate,ip_rate,generated,urgent,simulated_assigned)
-      VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,0,0,0)`).run(data.title,data.city,data.address,data.startsAt,duration,data.peopleNeeded,data.amount,data.description||'',String(managerId),stamp,stamp,data.region||'',selfRate,ipRate);
+    const result=this.db.prepare(`INSERT INTO orders(title,city,address,starts_at,duration_hours,people_needed,amount,description,status,created_by,created_at,updated_at,region,self_employed_rate,ip_rate,generated,urgent,simulated_assigned,target_user_id)
+      VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,0,?,0,'')`).run(data.title,data.city,data.address,data.startsAt,duration,data.peopleNeeded,data.amount,data.description||'',String(managerId),stamp,stamp,data.region||'',selfRate,ipRate,data.urgent?1:0);
     const id=num(result.lastInsertRowid);this.audit(managerId,'order.create','order',id,data);return this.getOrder(id);
   }
   createGeneratedOrder(data,managerId){
     const stamp=now();
-    const result=this.db.prepare(`INSERT INTO orders(title,city,address,starts_at,duration_hours,people_needed,amount,description,status,created_by,created_at,updated_at,region,self_employed_rate,ip_rate,generated,urgent,simulated_assigned)
-      VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,1,?,?)`).run(data.title,data.city,data.address,data.startsAt,data.durationHours,data.peopleNeeded,data.amount,data.description||'',String(managerId),stamp,stamp,data.region||'',data.selfEmployedRate||450,Math.max(550,data.ipRate||550),data.urgent?1:0,Math.max(0,data.simulatedAssigned||0));
+    const result=this.db.prepare(`INSERT INTO orders(title,city,address,starts_at,duration_hours,people_needed,amount,description,status,created_by,created_at,updated_at,region,self_employed_rate,ip_rate,generated,urgent,simulated_assigned,target_user_id)
+      VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,1,?,?,?)`).run(data.title,data.city,data.address,data.startsAt,data.durationHours,data.peopleNeeded,data.amount,data.description||'',String(managerId),stamp,stamp,data.region||'',data.selfEmployedRate||450,Math.max(550,data.ipRate||550),data.urgent?1:0,Math.max(0,data.simulatedAssigned||0),String(data.targetUserId||''));
     const id=num(result.lastInsertRowid);this.audit(managerId,'order.generated','order',id,data);return this.getOrder(id);
   }
   getOrder(id){return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.id=?`).get(id);}
   updateOrderLocation(id,{latitude,longitude}){const lat=Number(latitude),lon=Number(longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat < -90||lat > 90||lon < -180||lon > 180)return this.getOrder(id);this.db.prepare('UPDATE orders SET latitude=?,longitude=?,updated_at=? WHERE id=?').run(lat,lon,now(),id);return this.getOrder(id);}
-  listActiveOrders({city='',region='',limit=20}={}){
-    if(region)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND o.region=? ORDER BY o.starts_at LIMIT ?`).all(region,limit);
-    if(city)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND lower(o.city)=lower(?) ORDER BY o.starts_at LIMIT ?`).all(city,limit);
-    return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' ORDER BY o.starts_at LIMIT ?`).all(limit);
+  listActiveOrders({city='',region='',userId='',limit=20}={}){
+    const target=String(userId||'');
+    if(region&&target)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND o.region=? AND (o.generated=0 OR o.target_user_id=?) ORDER BY o.starts_at LIMIT ?`).all(region,target,limit);
+    if(city&&target)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND lower(o.city)=lower(?) AND (o.generated=0 OR o.target_user_id=?) ORDER BY o.starts_at LIMIT ?`).all(city,target,limit);
+    if(target)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND (o.generated=0 OR o.target_user_id=?) ORDER BY o.starts_at LIMIT ?`).all(target,limit);
+    if(region)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND o.region=? AND o.generated=0 ORDER BY o.starts_at LIMIT ?`).all(region,limit);
+    if(city)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND lower(o.city)=lower(?) AND o.generated=0 ORDER BY o.starts_at LIMIT ?`).all(city,limit);
+    return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND o.generated=0 ORDER BY o.starts_at LIMIT ?`).all(limit);
   }
   listActiveGeneratedOrders(region='',limit=100){if(region)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.generated=1 AND o.status='active' AND o.region=? ORDER BY o.starts_at LIMIT ?`).all(region,limit);return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.generated=1 AND o.status='active' ORDER BY o.starts_at LIMIT ?`).all(limit);}
   countActiveGeneratedOrders(region){return num(this.db.prepare("SELECT COUNT(*) count FROM orders WHERE generated=1 AND status='active' AND region=?").get(String(region||'')).count);}
+  countActiveGeneratedOrdersForUser(userId){return num(this.db.prepare("SELECT COUNT(*) count FROM orders WHERE generated=1 AND status='active' AND target_user_id=?").get(String(userId)).count);}
   updateGeneratedOrderDynamics(id,{ipRate,simulatedAssigned}){this.db.prepare("UPDATE orders SET ip_rate=?,simulated_assigned=?,updated_at=? WHERE id=? AND generated=1").run(Math.max(550,Number(ipRate)||550),Math.max(0,Number(simulatedAssigned)||0),now(),id);return this.getOrder(id);}
-  listManagedOrders(limit=20){return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM applications a WHERE a.order_id=o.id AND a.status='pending') AS pending_count,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status IN ('active','filled') ORDER BY o.starts_at LIMIT ?`).all(limit);}
+  listManagedOrders(limit=20){return this.db.prepare(`SELECT o.*,tu.username AS target_username,tu.first_name AS target_first_name,tu.last_name AS target_last_name,(SELECT COUNT(*) FROM applications a WHERE a.order_id=o.id AND a.status='pending') AS pending_count,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o LEFT JOIN users tu ON tu.telegram_id=o.target_user_id WHERE o.status IN ('active','filled') ORDER BY o.starts_at LIMIT ?`).all(limit);}
   setOrderStatus(id,status,managerId){
     const allowed=['active','filled','closed','cancelled'];if(!allowed.includes(status))throw Error('Invalid order status');
     return this.transaction(()=>{const order=this.getOrder(id);if(!order)return null;this.db.prepare('UPDATE orders SET status=?,updated_at=? WHERE id=?').run(status,now(),id);if(status==='cancelled')this.db.prepare("UPDATE shifts SET status='cancelled',updated_at=? WHERE order_id=? AND status NOT IN ('completed','cancelled')").run(now(),id);this.audit(managerId,`order.${status}`,'order',id);return this.getOrder(id);});
   }
 
   applyToOrder(orderId,userId){
-    const order=this.getOrder(orderId);if(!order||order.status!=='active')return {error:'closed'};
+    const order=this.getOrder(orderId);if(!order||order.status!=='active'||(order.target_user_id&&order.target_user_id!==String(userId)))return {error:'closed'};
     const user=this.getUser(userId);if(!user||user.status!=='active'||user.role!=='worker'||user.verified!==1||!user.region)return {error:'access'};
     try{const stamp=now();const result=this.db.prepare("INSERT INTO applications(order_id,user_id,status,created_at,updated_at) VALUES(?,?,'pending',?,?)").run(orderId,String(userId),stamp,stamp);const id=num(result.lastInsertRowid);this.audit(userId,'application.create','application',id,{orderId});return {application:this.getApplication(id)};}catch(error){if(String(error).includes('UNIQUE'))return {error:'duplicate'};throw error;}
   }

@@ -16,11 +16,9 @@ export class OrderGenerator{
     this.db=db;this.app=app;this.addressProvider=addressProvider;this.log=logger;
     this.enabled=process.env.BOT_AUTO_ORDERS!=='0';
     this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
-    this.ordersPerHour=Math.max(.1,Number(process.env.BOT_AUTO_ORDERS_PER_HOUR)||1.5);
     this.maxActive=7;
     this.startupTargets=new Map();
     this.seededRegions=new Set();
-    this.urgentChance=Math.min(.9,Math.max(0,Number(process.env.BOT_URGENT_ORDER_CHANCE)||.35));
   }
 
   async tick(){
@@ -28,45 +26,50 @@ export class OrderGenerator{
     const managerId=this.db.getGeneratorManagerId();
     if(!managerId){this.log.warn?.('Автогенератор: не найден активный менеджер. Укажите BOT_ADMIN_IDS или войдите менеджером в бот.');return;}
 
-    const workerRegions=this.db.listAutoOrderRegions();
-    if(!workerRegions.length){
-      this.log.warn?.('Автогенератор: нет пользователей с назначенным регионом; создавать заказы не для чего.');
+    const workers=this.db.listAutoOrderWorkers();
+    if(!workers.length){
+      this.log.warn?.('Автогенератор: нет верифицированных грузчиков с назначенным регионом.');
       return;
     }
-    for(const region of workerRegions){
-      let active=this.db.countActiveGeneratedOrders(region);
+    for(const worker of workers){
+      const userId=String(worker.telegram_id);
+      let active=this.db.countActiveGeneratedOrdersForUser(userId);
 
-      if(!this.seededRegions.has(region)){
-        const startupMax=Math.min(7,this.maxActive);
-        const startupTarget=this.startupTargets.get(region)??randomInt(3,startupMax);
-        this.startupTargets.set(region,startupTarget);
+      if(!this.seededRegions.has(userId)){
+        const startupTarget=this.startupTargets.get(userId)??randomInt(3,this.maxActive);
+        this.startupTargets.set(userId,startupTarget);
         const missing=Math.max(0,startupTarget-active);
         for(let i=0;i<missing;i++){
-          const order=await this.createOrder(region,managerId);
+          const order=await this.createOrder(worker,managerId);
           if(!order)break;
           active++;
           await this.app.publishGeneratedOrder(order);
-          this.log.log?.(`Стартовый автозаказ №${order.id} создан: ${order.city}${order.urgent?' (срочный)':''}`);
+          this.log.log?.(`Стартовый автозаказ №${order.id} создан для ${userId}: ${order.city}${order.urgent?' (срочный)':''}`);
         }
-        if(active>=startupTarget)this.seededRegions.add(region);
+        if(active>=startupTarget)this.seededRegions.add(userId);
         continue;
       }
 
-      if(active<this.maxActive&&Math.random()<this.ordersPerHour/60){
-        const order=await this.createOrder(region,managerId);
+      const rawFrequency=Number(worker.auto_orders_per_hour);
+      const frequency=Math.min(60,Math.max(0,Number.isFinite(rawFrequency)?rawFrequency:1.5));
+      if(active<this.maxActive&&frequency>0&&Math.random()<frequency/60){
+        const order=await this.createOrder(worker,managerId);
         if(!order)continue;
         await this.app.publishGeneratedOrder(order);
-        this.log.log?.(`Автозаказ №${order.id} создан: ${order.city}${order.urgent?' (срочный)':''}`);
+        this.log.log?.(`Автозаказ №${order.id} создан для ${userId}: ${order.city}${order.urgent?' (срочный)':''}`);
       }
     }
 
-    for(const order of this.db.listActiveGeneratedOrders('',100)){
+    for(const order of this.db.listActiveGeneratedOrders('',1000)){
       await this.advance(order,managerId);
     }
   }
 
-  async createOrder(region,managerId){
-    const urgent=Math.random()<this.urgentChance;
+  async createOrder(worker,managerId){
+    const region=worker.region;
+    const rawUrgentChance=Number(worker.urgent_order_chance);
+    const urgentChance=Math.min(.9,Math.max(0,Number.isFinite(rawUrgentChance)?rawUrgentChance:.35));
+    const urgent=Math.random()<urgentChance;
     const template=randomFrom(TEMPLATES);
     const durationHours=randomInt(template.duration[0],template.duration[1]);
     const peopleNeeded=randomInt(template.people[0],template.people[1]);
@@ -94,6 +97,7 @@ export class OrderGenerator{
       description:template.description,
       urgent,
       simulatedAssigned,
+      targetUserId:worker.telegram_id,
     },managerId);
     const point=await this.addressProvider?.geocodeAddress(resolved.address,resolved.regionLabel);
     if(point)order=this.db.updateOrderLocation(order.id,point);
