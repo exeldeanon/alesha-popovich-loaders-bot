@@ -57,8 +57,8 @@ export class BotApp{
     const text=String(message.text||'').trim();
     if(text==='/cancel'||text==='Отмена'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(text.startsWith('/start'))return this.start(chatId,user);
-    if(text==='/menu')return this.menu(chatId,user);
-    if(text==='/help'||text==='🆘 Помощь')return this.help(chatId,user);
+    if(text==='/menu')return this.isManager(user)||this.hasBotAccess(user)?this.menu(chatId,user):this.start(chatId,user);
+    if(text==='/help'||text==='🆘 Помощь')return this.isManager(user)||this.hasBotAccess(user)?this.help(chatId,user):this.start(chatId,user);
     const session=this.db.getSession(user.telegram_id);
     if(session)return this.handleSession(message,user,session);
     if(!this.isManager(user)&&!this.isWorker(user))return this.start(chatId,user);
@@ -112,7 +112,15 @@ export class BotApp{
     return this.menu(chatId,user,'Не понял команду. Выберите действие кнопкой.');
   }
 
-  beginAccess(chatId,user){if(user.status==='pending')return this.safeSend(chatId,'Заявка на доступ к боту уже отправлена менеджеру.',{reply_markup:removeKeyboard()});if(this.hasBotAccess(user))return this.menu(chatId,user,'Доступ к боту уже выдан.');this.db.setSession(user.telegram_id,'access','name',{});return this.safeSend(chatId,'Как вас зовут? Напишите имя и фамилию.',{reply_markup:removeKeyboard()});}
+  async beginAccess(chatId,user){
+    if(user.status==='pending')return this.safeSend(chatId,'Заявка на доступ к боту уже отправлена менеджеру.',{reply_markup:removeKeyboard()});
+    if(this.hasBotAccess(user))return this.menu(chatId,user,'Доступ к боту уже выдан.');
+    const name=[user.first_name,user.last_name].filter(Boolean).join(' ')||user.username||user.telegram_id;
+    const id=this.db.createAccessRequest(user.telegram_id,{name,city:'',experience:''});
+    const item=this.db.getAccessRequest(id);
+    await this.notifyManagers(accessText(item),{reply_markup:decisionKeyboard('access_decide',id)});
+    return this.safeSend(chatId,'<b>Заявка на доступ к боту отправлена.</b>\nМенеджер рассмотрит её. После одобрения вы сможете смотреть активные заказы.',{reply_markup:removeKeyboard()});
+  }
   async requestVerification(chatId,user){
     if(!this.hasBotAccess(user))return this.start(chatId,user);
     if(this.isVerifiedWorker(user))return this.menu(chatId,user,'Вы уже верифицированы.');
@@ -201,7 +209,7 @@ export class BotApp{
     if(!result)return this.menu(chatId,user,'Заявка уже обработана или данные устарели.');
     const worker=this.db.getUser(result.user_id);
     const typeLabel=worker.contractor_type==='ip'?'ИП':'Самозанятый';
-    await this.safeSend(result.user_id,`<b>✅ Верификация пройдена.</b>\nСтатус: <b>${typeLabel}</b>\nРегион: <b>${e(geo.label)}</b>\nТеперь вам доступны заказы.`,{reply_markup:workerMenu});
+    await this.safeSend(result.user_id,`<b>✅ Верификация пройдена.</b>\nСтатус: <b>${typeLabel}</b>\nРегион: <b>${e(geo.label)}</b>\nТеперь вы можете откликаться и брать заказы.`,{reply_markup:workerMenu});
     return this.menu(chatId,user,`Грузчик верифицирован: <b>${typeLabel}</b>, регион — <b>${e(geo.label)}</b>.`);
   }
 
