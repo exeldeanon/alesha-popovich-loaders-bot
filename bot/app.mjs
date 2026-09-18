@@ -196,6 +196,7 @@ export class BotApp{
     const worker=this.db.updateWorkerProfile(session.data.workerId,{region:geo.region_key});
     this.db.clearSession(user.telegram_id);
     const name=worker?.first_name||worker?.username||worker?.telegram_id||'Грузчик';
+    if(worker)await this.safeSend(worker.telegram_id,`Менеджер назначил вам регион: <b>${e(geo.label)}</b>.`,{reply_markup:this.menuFor(worker)});
     return this.menu(chatId,user,worker?`Регион для ${e(name)}: <b>${e(geo.label)}</b>.`:'Грузчик не найден.');
   }
 
@@ -238,7 +239,13 @@ export class BotApp{
       const geo=this.db.getRegionGeo(worker.region);
       const label=geo?.label||regionLabel(worker.region);
       const rows=[
-        [{text:worker.contractor_type==='ip'?'✅ ИП':'Сделать ИП',callback_data:`worker_type:${worker.telegram_id}:ip`},{text:worker.contractor_type==='self_employed'?'✅ Самозанятый':'Самозанятый',callback_data:`worker_type:${worker.telegram_id}:self_employed`}],
+        [
+          {text:worker.verified!==1?'✅ Не верифицирован':'Не верифицирован',callback_data:`worker_status:${worker.telegram_id}:unverified`},
+        ],
+        [
+          {text:worker.verified===1&&worker.contractor_type==='ip'?'✅ ИП':'ИП',callback_data:`worker_status:${worker.telegram_id}:ip`},
+          {text:worker.verified===1&&worker.contractor_type==='self_employed'?'✅ Самозанятый':'Самозанятый',callback_data:`worker_status:${worker.telegram_id}:self_employed`},
+        ],
         [{text:'📍 Изменить регион / город',callback_data:`worker_region_custom:${worker.telegram_id}`}],
       ];
       await this.safeSend(chatId,workerProfileText({...worker,region:label}),{reply_markup:inline(rows)});
@@ -289,7 +296,16 @@ export class BotApp{
       return this.safeSend(chatId,`Тип занятости: <b>${match[2]==='ip'?'ИП':'Самозанятый'}</b>.\nТеперь введите регион или город, который нужно назначить грузчику. Например: «Самара», «Краснодарский край», «Республика Татарстан».`,{reply_markup:removeKeyboard()});
     }
     match=data.match(/^worker_region_custom:(\d+)$/);if(match&&this.isManager(user)){const worker=this.db.getUser(match[1]);if(!worker)return this.safeSend(chatId,'Грузчик не найден.');this.db.setSession(user.telegram_id,'worker_region','input',{workerId:worker.telegram_id});return this.safeSend(chatId,`Введите любой город, область, край или республику России для ${e(worker.first_name||worker.username||worker.telegram_id)}. Например: «Самара», «Краснодарский край», «Республика Татарстан».`,{reply_markup:removeKeyboard()});}
-    match=data.match(/^worker_type:(\d+):(ip|self_employed)$/);if(match&&this.isManager(user)){const worker=this.db.updateWorkerProfile(match[1],{contractorType:match[2]});return this.safeSend(chatId,worker?`${worker.first_name||worker.username||worker.telegram_id}: оформление — ${worker.contractor_type==='ip'?'ИП (повышенная ставка)':'самозанятый'}.`:'Грузчик не найден.');}
+    match=data.match(/^worker_status:(\d+):(unverified|ip|self_employed)$/);if(match&&this.isManager(user)){
+      const status=match[2];
+      const worker=status==='unverified'
+        ?this.db.updateWorkerProfile(match[1],{verified:false})
+        :this.db.updateWorkerProfile(match[1],{contractorType:status,verified:true});
+      if(!worker)return this.safeSend(chatId,'Грузчик не найден.');
+      const label=status==='unverified'?'Не верифицирован':(status==='ip'?'ИП':'Самозанятый');
+      await this.safeSend(worker.telegram_id,`Ваш статус изменён менеджером: <b>${label}</b>.`,{reply_markup:this.menuFor(worker)});
+      return this.safeSend(chatId,`${worker.first_name||worker.username||worker.telegram_id}: статус — <b>${label}</b>.`);
+    }
     match=data.match(/^worker_region:(\d+):([a-z_]+)$/);if(match&&this.isManager(user)){if(!REGIONS[match[2]])return this.safeSend(chatId,'Неизвестный регион.');const worker=this.db.updateWorkerProfile(match[1],{region:match[2]});return this.safeSend(chatId,worker?`${worker.first_name||worker.username||worker.telegram_id}: регион — ${regionLabel(worker.region)}.`:'Грузчик не найден.');}
     match=data.match(/^order_apply:(\d+)$/);if(match&&this.isWorker(user)){
       const result=this.db.applyToOrder(Number(match[1]),user.telegram_id);const messages={closed:'Заказ уже закрыт или набран.',access:'⛔ Откликаться на заказы можно только после верификации у менеджера.',duplicate:'Вы уже откликались на этот заказ.'};if(result.error)return this.safeSend(chatId,messages[result.error],{reply_markup:this.menuFor(user)});
