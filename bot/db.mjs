@@ -222,11 +222,11 @@ export class BotDatabase {
   getGeneratorManagerId(){return this.listManagers()[0]?.telegram_id||null;}
   toggleNotifications(id){this.db.prepare('UPDATE users SET notifications=1-notifications,updated_at=? WHERE telegram_id=?').run(now(),String(id));return this.getUser(id);}
 
-  createAccessRequest(userId,{name,city,phone,experience}){
+  createAccessRequest(userId,{name,city,experience}){
     return this.transaction(()=>{
       this.db.prepare("UPDATE access_requests SET status='declined',decided_at=? WHERE user_id=? AND status='pending'").run(now(),String(userId));
-      const result=this.db.prepare('INSERT INTO access_requests(user_id,name,city,phone,experience,created_at) VALUES(?,?,?,?,?,?)').run(String(userId),name,city,phone,experience||'',now());
-      this.db.prepare("UPDATE users SET status='pending',verified=0,region='',city=?,phone=?,updated_at=? WHERE telegram_id=?").run(city,phone,now(),String(userId));
+      const result=this.db.prepare('INSERT INTO access_requests(user_id,name,city,phone,experience,created_at) VALUES(?,?,?,?,?,?)').run(String(userId),name,city,'',experience||'',now());
+      this.db.prepare("UPDATE users SET status='pending',verified=0,region='',city=?,phone='',updated_at=? WHERE telegram_id=?").run(city,now(),String(userId));
       this.audit(userId,'access.request','access_request',result.lastInsertRowid,{city});
       return num(result.lastInsertRowid);
     });
