@@ -524,6 +524,38 @@ export class BotApp{
     }
     if(data==='cancel'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(data==='access_start')return this.beginAccess(chatId,user);
+    if(data==='cabinet_withdraw'&&this.isWorker(user)){
+      if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Выплаты доступны после верификации у менеджера.');
+      return this.beginWithdrawal(chatId,user);
+    }
+    if(data==='cabinet_history'&&this.isWorker(user)){
+      if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ История смен доступна после верификации у менеджера.');
+      return this.showShifts(chatId,user,true);
+    }
+    let match=data.match(/^user_pref:(any|morning|day|evening)$/);if(match&&this.isWorker(user)){
+      const updated=this.db.updateUserPreferences(user.telegram_id,{workTimePreference:match[1]});
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
+    if(data==='user_dnd_toggle'&&this.isWorker(user)){
+      const updated=this.db.updateUserPreferences(user.telegram_id,{dndEnabled:user.dnd_enabled!==1});
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
+    if(data==='user_dnd_time'&&this.isWorker(user)){
+      this.db.setSession(user.telegram_id,'user_settings','dnd_time',{});
+      return this.safeSend(chatId,'Введите время режима «Не беспокоить» в формате <b>23:00-08:00</b>.',{reply_markup:removeKeyboard()});
+    }
+    match=data.match(/^user_notify:(new_order|rate|nudge|shift)$/);if(match&&this.isWorker(user)){
+      const changes=match[1]==='new_order'?{newOrderNotifications:user.notifications!==1}
+        :match[1]==='rate'?{rateNotifications:user.rate_notifications!==1}
+        :match[1]==='nudge'?{orderNudges:user.order_nudges!==1}
+        :{shiftReminderNotifications:user.shift_reminder_notifications!==1};
+      const updated=this.db.updateUserPreferences(user.telegram_id,changes);
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
+    match=data.match(/^user_notify_all:(on|off)$/);if(match&&this.isWorker(user)){
+      const updated=this.db.setAllNotifications(user.telegram_id,match[1]==='on');
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
     if(data==='order_nudges_off'&&this.isWorker(user)){
       const updated=this.db.setOrderNudges(user.telegram_id,false);
       const text='🔕 Подгоняющую рассылку отключил. Уведомления о новых заказах остаются как были.';
@@ -539,7 +571,7 @@ export class BotApp{
       return this.safeSend(chatId,text,options);
     }
     if(data==='orders_noop')return;
-    let match=data.match(/^orders_page:(\d+)$/);if(match&&this.isWorker(user)){
+    match=data.match(/^orders_page:(\d+)$/);if(match&&this.isWorker(user)){
       return this.showOrders(chatId,user,{page:Number(match[1]),messageId:query.message?.message_id||null});
     }
     match=data.match(/^order_view:(\d+):(\d+)$/);if(match&&this.isWorker(user)){
