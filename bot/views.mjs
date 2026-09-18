@@ -7,6 +7,16 @@ export const workerMenu=reply([
   ['🆘 Помощь'],
 ]);
 
+export const unverifiedWorkerMenu=reply([
+  ['💰 Личный кабинет'],
+  ['🔑 Запросить верификацию'],
+  ['🆘 Помощь'],
+]);
+
+const verificationStatus=user=>user?.status==='active'&&user?.verified===1
+  ?(user.contractor_type==='ip'?'ИП':'Самозанятый')
+  :'Не верифицирован';
+
 export const managerMenu=reply([
   ['➕ Создать заказ','📋 Заказы'],
   ['🔑 Доступы','👷 Отклики'],
@@ -59,7 +69,7 @@ export function workerProfileText(user){return [
   `<b>👷 ${e(fullName(user))}</b>`,
   user.username?`@${e(user.username)}`:null,
   `📍 Регион: ${e(user.region||'не назначен')}`,
-  `💼 Оформление: ${user.contractor_type==='ip'?'ИП — повышенная ставка':'Самозанятый — базовая ставка'}`,
+  `💼 Статус: ${verificationStatus(user)}`,
 ].filter(Boolean).join('\n');}
 
 export function applicationText(item){return [
@@ -96,6 +106,9 @@ export function shiftStatus(status){return ({assigned:'назначена',in_pr
 export function cabinetText(user,cabinet){return [
   `<b>💰 Личный кабинет</b>`,
   `${e(fullName(user))}${user.city?` · ${e(user.city)}`:''}`,
+  `🪪 Статус: <b>${verificationStatus(user)}</b>`,
+  user.region?`📍 Регион: ${e(user.region)}`:null,
+  user.verified!==1?'⚠️ Чтобы получить доступ к заказам, запросите верификацию у менеджера.':null,
   '',
   `✅ Выполнено смен: <b>${cabinet.shifts}</b>`,
   `⏱ Отработано: <b>${hours(cabinet.hours)}</b>`,
