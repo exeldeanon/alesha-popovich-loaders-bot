@@ -18,6 +18,13 @@ const verificationStatus=user=>user?.status==='active'&&user?.verified===1
   ?(user.contractor_type==='ip'?'ИП':'Самозанятый')
   :'Не верифицирован';
 
+export function verificationText(item){return [
+  `<b>🪪 Запрос верификации №${item.id}</b>`,
+  `Грузчик: ${e(fullName(item))}${item.username?` (@${e(item.username)})`:''}`,
+  item.city?`Город из анкеты доступа: ${e(item.city)}`:null,
+  `Telegram ID: <code>${e(item.user_id)}</code>`,
+].filter(Boolean).join('\n');}
+
 export const managerMenu=reply([
   ['➕ Создать заказ','📋 Заказы'],
   ['🔑 Доступы','👷 Отклики'],
@@ -129,6 +136,7 @@ export function statsText(stats){return [
   `Активных грузчиков: ${stats.workers}`,
   `Активных заказов: ${stats.activeOrders}`,
   `Запросов доступа: ${stats.pendingAccess}`,
+  `Запросов верификации: ${stats.pendingVerification}`,
   `Новых откликов: ${stats.pendingApplications}`,
   `Смен на подтверждении: ${stats.pendingShifts}`,
   `Выплат на подтверждении: ${stats.pendingWithdrawals}`,
