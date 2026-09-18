@@ -391,7 +391,10 @@ export class BotApp{
     match=data.match(/^worker_setting_toggle:(\d+):(create|maintenance|logging)$/);if(match&&this.isManager(user)){
       const worker=this.db.getUser(match[1]);if(!worker)return this.safeSend(chatId,'Грузчик не найден.');
       const kind=match[2],changes=kind==='create'?{canCreateOrders:worker.can_create_orders!==1}:kind==='maintenance'?{maintenanceMode:worker.maintenance_mode!==1}:{actionLogging:worker.action_logging!==1};
-      this.db.updateWorkerSettings(worker.telegram_id,changes);
+      const updated=this.db.updateWorkerSettings(worker.telegram_id,changes);
+      if((kind==='maintenance'&&updated?.maintenance_mode===1)||(kind==='create'&&updated?.can_create_orders!==1))this.db.clearSession(worker.telegram_id);
+      if(kind==='create')await this.safeSend(worker.telegram_id,updated.can_create_orders===1?'➕ Менеджер разрешил вам создавать заказы. Кнопка появилась в меню.':'➕ Менеджер отключил для вас создание заказов.',{reply_markup:this.menuFor(updated)});
+      if(kind==='maintenance')await this.safeSend(worker.telegram_id,updated.maintenance_mode===1?'🛠 Для вашего аккаунта включён режим технических работ.':'✅ Технические работы завершены, бот снова доступен.',{reply_markup:this.menuFor(updated)});
       return this.showWorkerSettings(chatId,worker.telegram_id);
     }
     match=data.match(/^worker_logs:(\d+)$/);if(match&&this.isManager(user))return this.showWorkerLogs(chatId,match[1]);
