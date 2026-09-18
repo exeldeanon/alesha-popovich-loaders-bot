@@ -59,7 +59,7 @@ export function workerProfileText(user){return [
   `<b>👷 ${e(fullName(user))}</b>`,
   user.username?`@${e(user.username)}`:null,
   `📍 Регион: ${e(user.region||'не назначен')}`,
-  `💼 Оформление: ${user.contractor_type==='ip'?'ИП — повышенная ставка':'Самозанятый — базовая ставка'}`,
+  `💼 Статус: ${user.status==='active'?(user.contractor_type==='ip'?'ИП':'Самозанятый'):'Не верифицирован'},`
 ].filter(Boolean).join('\n');}
 
 export function applicationText(item){return [
@@ -96,6 +96,9 @@ export function shiftStatus(status){return ({assigned:'назначена',in_pr
 export function cabinetText(user,cabinet){return [
   `<b>💰 Личный кабинет</b>`,
   `${e(fullName(user))}${user.city?` · ${e(user.city)}`:''}`,
+  `🪪 Статус: <b>${user.status==='active'?(user.contractor_type==='ip'?'ИП':'Самозанятый'):'Не верифицирован'}</b>`,
+  user.region?`📍 Регион: ${e(user.region)}`:null,
+  user.status!=='active'?'⚠️ Чтобы получить доступ к заказам, запросите верификацию у менеджера.':null,
   '',
   `✅ Выполнено смен: <b>${cabinet.shifts}</b>`,
   `⏱ Отработано: <b>${hours(cabinet.hours)}</b>`,
