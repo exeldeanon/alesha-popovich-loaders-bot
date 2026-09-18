@@ -168,6 +168,28 @@ export class BotDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_users_region ON users(region,status,role);
       CREATE INDEX IF NOT EXISTS idx_orders_region_status ON orders(region,status,starts_at);
+      CREATE TABLE IF NOT EXISTS region_geo(
+        region_key TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        south REAL NOT NULL,
+        west REAL NOT NULL,
+        north REAL NOT NULL,
+        east REAL NOT NULL,
+        osm_type TEXT NOT NULL DEFAULT '',
+        osm_id TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS region_addresses(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        region_key TEXT NOT NULL,
+        region_label TEXT NOT NULL,
+        address TEXT NOT NULL,
+        use_count INTEGER NOT NULL DEFAULT 0,
+        last_used_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(region_key,address)
+      );
+      CREATE INDEX IF NOT EXISTS idx_region_addresses_key ON region_addresses(region_key,use_count,last_used_at);
     `);
   }
 
@@ -288,6 +310,12 @@ export class BotDatabase {
   listOrderApplications(orderId,limit=30){return this.db.prepare(`SELECT a.*,o.title,o.city,o.starts_at,o.amount,u.username,u.first_name,u.last_name,u.phone FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.order_id=? AND a.status='pending' ORDER BY a.created_at LIMIT ?`).all(orderId,limit);}
   decideWithdrawal(id,managerId,paid){const item=this.getWithdrawal(id);if(!item||item.status!=='pending')return null;const status=paid?'paid':'declined';this.db.prepare('UPDATE withdrawals SET status=?,decided_at=?,decided_by=? WHERE id=?').run(status,now(),String(managerId),id);this.audit(managerId,`withdrawal.${status}`,'withdrawal',id,{amount:item.amount});return {...item,status};}
 
+  getRegionGeo(regionKey){return this.db.prepare("SELECT * FROM region_geo WHERE region_key=?").get(String(regionKey));}
+  saveRegionGeo(item){this.db.prepare(`INSERT INTO region_geo(region_key,label,south,west,north,east,osm_type,osm_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(region_key) DO UPDATE SET label=excluded.label,south=excluded.south,west=excluded.west,north=excluded.north,east=excluded.east,osm_type=excluded.osm_type,osm_id=excluded.osm_id,updated_at=excluded.updated_at`).run(item.region_key,item.label,item.south,item.west,item.north,item.east,item.osm_type||'',item.osm_id||'',item.updated_at||now());}
+  saveRegionAddresses(regionKey,regionLabel,addresses){const stmt=this.db.prepare("INSERT OR IGNORE INTO region_addresses(region_key,region_label,address,created_at) VALUES(?,?,?,?)");const stamp=now();this.transaction(()=>{for(const address of new Set(addresses))stmt.run(String(regionKey),String(regionLabel),String(address),stamp);});}
+  countRegionAddresses(regionKey){return num(this.db.prepare("SELECT COUNT(*) count FROM region_addresses WHERE region_key=?").get(String(regionKey)).count);}
+  randomRegionAddress(regionKey){return this.db.prepare("SELECT * FROM region_addresses WHERE region_key=? ORDER BY use_count ASC,RANDOM() LIMIT 1").get(String(regionKey));}
+  markRegionAddressUsed(id){this.db.prepare("UPDATE region_addresses SET use_count=use_count+1,last_used_at=? WHERE id=?").run(now(),id);}
   saveOrderMessage(orderId,userId,messageId){this.db.prepare(`INSERT INTO order_messages(order_id,user_id,message_id,created_at) VALUES(?,?,?,?) ON CONFLICT(order_id,user_id) DO UPDATE SET message_id=excluded.message_id,created_at=excluded.created_at`).run(orderId,String(userId),messageId,now());}
   listOrderMessages(orderId){return this.db.prepare("SELECT * FROM order_messages WHERE order_id=?").all(orderId);}
   getSession(userId){const row=this.db.prepare('SELECT * FROM sessions WHERE user_id=?').get(String(userId));return row?{...row,data:JSON.parse(row.data)}:null;}
