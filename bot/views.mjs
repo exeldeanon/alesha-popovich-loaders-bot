@@ -84,13 +84,14 @@ const compactOrderAddress=value=>{
 };
 
 const placesLeft=order=>Math.max(0,Number(order.people_needed||0)-Number(order.assigned_count||0)-Number(order.simulated_assigned||0));
+const placesWord=value=>{const n=Math.abs(Number(value)||0)%100,n1=n%10;return n>10&&n<20?'мест':n1===1?'место':n1>=2&&n1<=4?'места':'мест';};
 
 export function orderListKeyboard(orders,worker,{page=0,pageSize=5}={}){
   const totalPages=Math.max(1,Math.ceil(orders.length/pageSize));
   const safePage=Math.min(totalPages-1,Math.max(0,Number(page)||0));
   const start=safePage*pageSize;
   const rows=orders.slice(start,start+pageSize).map(order=>[{
-    text:`${order.urgent?'🔥 ':''}${compactOrderAddress(order.address)} · ${money(orderTotalForWorker(order,worker))} · осталось ${placesLeft(order)}`,
+    text:`${order.urgent?'🔥 ':''}${compactOrderAddress(order.address)} · ${money(orderTotalForWorker(order,worker))} · осталось ${placesLeft(order)} ${placesWord(placesLeft(order))}`,
     callback_data:`order_view:${order.id}:${safePage}`,
   }]);
   if(totalPages>1)rows.push([
