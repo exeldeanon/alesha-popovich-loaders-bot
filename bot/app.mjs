@@ -163,6 +163,53 @@ export class BotApp{
     return this.menu(chatId,user,'Не понял команду. Выберите действие кнопкой.');
   }
 
+  async showCabinet(chatId,user){
+    const geo=this.db.getRegionGeo(user.region);
+    const cabinet=this.db.getCabinet(user.telegram_id);
+    return this.safeSend(chatId,cabinetText({...user,region:geo?.label||regionLabel(user.region)},cabinet),{reply_markup:inline([
+      [
+        {text:'💸 Вывести деньги',callback_data:'cabinet_withdraw'},
+        {text:'📜 История смен',callback_data:'cabinet_history'},
+      ],
+    ])});
+  }
+
+  async showUserSettings(chatId,user,{messageId=null,notice=''}={}){
+    const fresh=this.db.getUser(user.telegram_id)||user;
+    const pref=fresh.work_time_preference||'any';
+    const rows=[
+      [
+        {text:`${pref==='any'?'✅ ':''}Любое`,callback_data:'user_pref:any'},
+        {text:`${pref==='morning'?'✅ ':''}Утро`,callback_data:'user_pref:morning'},
+        {text:`${pref==='day'?'✅ ':''}День`,callback_data:'user_pref:day'},
+        {text:`${pref==='evening'?'✅ ':''}Вечер`,callback_data:'user_pref:evening'},
+      ],
+      [
+        {text:`🌙 Не беспокоить: ${fresh.dnd_enabled===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_dnd_toggle'},
+        {text:`🕘 ${fresh.dnd_start}–${fresh.dnd_end}`,callback_data:'user_dnd_time'},
+      ],
+      [
+        {text:`🔔 Новые заказы: ${fresh.notifications===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:new_order'},
+        {text:`📈 Рост ставки: ${fresh.rate_notifications===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:rate'},
+      ],
+      [
+        {text:`💪 Подгонялки: ${fresh.order_nudges===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:nudge'},
+        {text:`⏰ Смены: ${fresh.shift_reminder_notifications===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:shift'},
+      ],
+      [
+        {text:'🔕 Отключить все уведомления',callback_data:'user_notify_all:off'},
+        {text:'🔔 Включить все',callback_data:'user_notify_all:on'},
+      ],
+    ];
+    const text=`${notice?e(notice)+'\n\n':''}${userSettingsText(fresh)}`;
+    const options={reply_markup:inline(rows)};
+    if(messageId){
+      try{return await this.tg.editMessage(chatId,messageId,text,options);}
+      catch(error){this.log.warn?.('Не удалось обновить настройки:',error.message);}
+    }
+    return this.safeSend(chatId,text,options);
+  }
+
   async beginAccess(chatId,user){
     if(user.status==='pending')return this.safeSend(chatId,'Заявка на доступ к боту уже отправлена менеджеру.',{reply_markup:removeKeyboard()});
     if(this.hasBotAccess(user))return this.menu(chatId,user,'Доступ к боту уже выдан.');
@@ -201,6 +248,7 @@ export class BotApp{
     if(session.flow==='access')return this.accessSession(message,user,session,text);
     if(session.flow==='order'&&(this.isManager(user)||this.canCreateOrder(user)))return this.orderSession(message,user,session,text);
     if(session.flow==='worker_setting'&&this.isManager(user))return this.workerSettingSession(message,user,session,text);
+    if(session.flow==='user_settings'&&this.isWorker(user))return this.userSettingsSession(message,user,session,text);
     if(session.flow==='withdrawal'&&this.isWorker(user))return this.withdrawalSession(message,user,text);
     if(session.flow==='shift_edit'&&this.isManager(user))return this.shiftEditSession(message,user,session,text);
     if(session.flow==='worker_region'&&this.isManager(user))return this.workerRegionSession(message,user,session,text);
@@ -256,6 +304,20 @@ export class BotApp{
       return this.showWorkerSettings(chatId,workerId,'Шанс срочного заказа обновлён.');
     }
     this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Настройка отменена.');
+  }
+
+  async userSettingsSession(message,user,session,text){
+    const chatId=message.chat.id;
+    if(session.step==='dnd_time'){
+      const match=text.match(/^([01]\d|2[0-3]):([0-5]\d)\s*[-–—]\s*([01]\d|2[0-3]):([0-5]\d)$/);
+      if(!match)return this.safeSend(chatId,'Введите интервал в формате <b>23:00-08:00</b>.');
+      const start=`${match[1]}:${match[2]}`,end=`${match[3]}:${match[4]}`;
+      const updated=this.db.updateUserPreferences(user.telegram_id,{dndStart:start,dndEnd:end,dndEnabled:true});
+      this.db.clearSession(user.telegram_id);
+      return this.showUserSettings(chatId,updated,{notice:`Режим «Не беспокоить» установлен: ${start}–${end}.`});
+    }
+    this.db.clearSession(user.telegram_id);
+    return this.showUserSettings(chatId,user,{notice:'Настройка отменена.'});
   }
 
   async withdrawalSession(message,user,text){
