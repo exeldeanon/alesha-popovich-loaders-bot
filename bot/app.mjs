@@ -19,6 +19,7 @@ export class BotApp{
   async sendOrderToWorker(worker,order,{save=false,notification=true}={}){
     if(notification&&!this.canPush(worker,'new_order'))return null;
     const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});
+    if(sent)this.db.recordWorkerOrderEvent(worker.telegram_id,order.id,'seen');
     if(save&&sent?.message_id)this.db.saveOrderMessage(order.id,worker.telegram_id,sent.message_id);
     return sent;
   }
@@ -158,7 +159,7 @@ export class BotApp{
       if(text==='🗓 Мои смены'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Смены доступны после верификации у менеджера.');return this.showShifts(chatId,user,false);}
       if(text==='📜 История смен'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ История смен доступна после верификации у менеджера.');return this.showShifts(chatId,user,true);}
       if(text==='💸 Запросить выплату'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Выплаты доступны после верификации у менеджера.');return this.beginWithdrawal(chatId,user);}
-      if(text==='🔔 Уведомления'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Уведомления о заказах доступны после верификации.');const changed=this.db.toggleNotifications(user.telegram_id);return this.menu(chatId,changed,`Уведомления о новых заказах ${changed.notifications?'включены':'выключены'}.`);}
+      if(text==='🔔 Уведомления')return this.showUserSettings(chatId,user);
     }
     return this.menu(chatId,user,'Не понял команду. Выберите действие кнопкой.');
   }
@@ -508,7 +509,7 @@ export class BotApp{
       `Было: <s>${money(oldTotal)}</s> → стало: <b>${money(newTotal)}</b>`,
     ].join('\n'),{reply_markup:inline([
       [{text:'📦 Открыть заказ',callback_data:`order_view:${updatedOrder.id}:0`}],
-      [{text:'⚙️ Настройки уведомлений',callback_data:'user_notify:rate'}],
+      [{text:'⚙️ Настройки уведомлений',callback_data:'user_settings_open'}],
     ])});
   }
 
@@ -544,6 +545,7 @@ export class BotApp{
     }
     if(data==='cancel'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(data==='access_start')return this.beginAccess(chatId,user);
+    if(data==='user_settings_open'&&this.isWorker(user))return this.showUserSettings(chatId,user,{messageId:query.message?.message_id||null});
     if(data==='cabinet_withdraw'&&this.isWorker(user)){
       if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Выплаты доступны после верификации у менеджера.');
       return this.beginWithdrawal(chatId,user);
@@ -562,7 +564,7 @@ export class BotApp{
     }
     if(data==='user_dnd_time'&&this.isWorker(user)){
       this.db.setSession(user.telegram_id,'user_settings','dnd_time',{});
-      return this.safeSend(chatId,'Введите время режима «Не беспокоить» в формате <b>23:00-08:00</b>.',{reply_markup:removeKeyboard()});
+      return this.safeSend(chatId,'Введите время режима «Не беспокоить» в формате <b>23:00-08:00</b>.',{reply_markup:this.menuFor(user)});
     }
     match=data.match(/^user_notify:(new_order|rate|nudge|shift)$/);if(match&&this.isWorker(user)){
       const changes=match[1]==='new_order'?{newOrderNotifications:user.notifications!==1}
