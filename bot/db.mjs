@@ -232,8 +232,8 @@ export class BotDatabase {
       ON CONFLICT(telegram_id) DO UPDATE SET role='manager',status='active',updated_at=excluded.updated_at`).run(key,stamp,stamp,stamp);
   }
   getUser(id){return this.db.prepare('SELECT * FROM users WHERE telegram_id=?').get(String(id));}
-  listActiveWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 ORDER BY created_at").all();}
-  listActiveWorkersByRegion(region){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 AND region=? ORDER BY created_at").all(String(region||''));}
+  listActiveWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 AND maintenance_mode=0 ORDER BY created_at").all();}
+  listActiveWorkersByRegion(region){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND notifications=1 AND maintenance_mode=0 AND region=? ORDER BY created_at").all(String(region||''));}
   listActiveWorkerRegions(){return this.db.prepare("SELECT DISTINCT region FROM users WHERE role='worker' AND status='active' AND verified=1 AND region<>'' ORDER BY region").all().map(row=>row.region);}
   listAutoOrderRegions(){return this.db.prepare("SELECT DISTINCT region FROM users WHERE role='worker' AND status='active' AND region<>'' ORDER BY region").all().map(row=>row.region);}
   listAutoOrderWorkers(){return this.db.prepare("SELECT * FROM users WHERE role='worker' AND status='active' AND verified=1 AND region<>'' ORDER BY created_at").all();}
