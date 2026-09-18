@@ -366,6 +366,29 @@ export class BotApp{
 
   async createWithdrawal(chatId,user,amount){const result=this.db.createWithdrawal(user.telegram_id,amount);if(result.error)return this.safeSend(chatId,`Недоступная сумма. Сейчас можно вывести ${money(result.cabinet.available)}.`);this.db.clearSession(user.telegram_id);await this.notifyManagers(withdrawalText(result.withdrawal),{reply_markup:decisionKeyboard('withdrawal_decide',result.withdrawal.id,'Выплачено')});return this.menu(chatId,user,`Заявка на ${money(amount)} отправлена менеджеру.`);}
 
+  async sendOrderNudges(intervalMinutes=45){
+    const intervalMs=Math.max(10,Number(intervalMinutes)||45)*60_000;
+    const messages=[
+      count=>`Братан, не зевай 😄 Сейчас доступно <b>${count}</b> заказов. Глянь, может твой уже там.`,
+      count=>`Давай-давай 🔥 В списке сейчас <b>${count}</b> заказов — адреса и оплата уже внутри.`,
+      count=>`Есть движ 👀 Сейчас активно <b>${count}</b> заказов. Загляни в список и выбери нормальный вариант.`,
+      count=>`Эй, работа сама себя не возьмёт 😄 Сейчас <b>${count}</b> заказов. Погнали смотреть.`,
+    ];
+    for(const worker of this.db.listAutoOrderWorkers()){
+      if(worker.order_nudges!==1||worker.maintenance_mode===1)continue;
+      const last=worker.last_order_nudge_at?new Date(worker.last_order_nudge_at).getTime():0;
+      if(last&&Date.now()-last<intervalMs)continue;
+      const orders=this.workerOrders(worker);
+      if(!orders.length)continue;
+      const text=messages[Math.floor(Math.random()*messages.length)](orders.length);
+      const sent=await this.safeSend(worker.telegram_id,text,{reply_markup:inline([
+        [{text:'📦 Посмотреть заказы',callback_data:'orders_page:0'}],
+        [{text:'🔕 Отключить рассылку',callback_data:'order_nudges_off'}],
+      ])});
+      if(sent)this.db.markOrderNudgeSent(worker.telegram_id);
+    }
+  }
+
   async handleCallback(query){
     const user=this.db.upsertUser(query.from),chatId=query.message?.chat?.id??query.from.id,data=query.data||'';
     await this.tg.answerCallback(query.id).catch(()=>{});
@@ -375,6 +398,20 @@ export class BotApp{
     }
     if(data==='cancel'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(data==='access_start')return this.beginAccess(chatId,user);
+    if(data==='order_nudges_off'&&this.isWorker(user)){
+      const updated=this.db.setOrderNudges(user.telegram_id,false);
+      const text='🔕 Подгоняющую рассылку отключил. Уведомления о новых заказах остаются как были.';
+      const options={reply_markup:inline([[{text:'🔔 Включить обратно',callback_data:'order_nudges_on'}]])};
+      if(query.message?.message_id){try{return await this.tg.editMessage(chatId,query.message.message_id,text,options);}catch{}}
+      return this.safeSend(chatId,text,options);
+    }
+    if(data==='order_nudges_on'&&this.isWorker(user)){
+      this.db.setOrderNudges(user.telegram_id,true);
+      const text='🔔 Подгоняющая рассылка снова включена.';
+      const options={reply_markup:inline([[{text:'📦 Посмотреть заказы',callback_data:'orders_page:0'}],[{text:'🔕 Отключить рассылку',callback_data:'order_nudges_off'}]])};
+      if(query.message?.message_id){try{return await this.tg.editMessage(chatId,query.message.message_id,text,options);}catch{}}
+      return this.safeSend(chatId,text,options);
+    }
     if(data==='orders_noop')return;
     let match=data.match(/^orders_page:(\d+)$/);if(match&&this.isWorker(user)){
       return this.showOrders(chatId,user,{page:Number(match[1]),messageId:query.message?.message_id||null});
