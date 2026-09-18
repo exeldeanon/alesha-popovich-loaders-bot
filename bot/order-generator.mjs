@@ -77,7 +77,7 @@ export class OrderGenerator{
     const resolved=await this.addressProvider?.getAddress(region);
     if(!resolved){this.log.warn?.(`Нет реального адреса для региона ${region}; заказ пропущен.`);return null;}
 
-    return this.db.createGeneratedOrder({
+    let order=this.db.createGeneratedOrder({
       title:urgent?`Срочно: ${template.title}`:template.title,
       city:resolved.regionLabel,
       region:resolved.regionKey,
@@ -92,6 +92,9 @@ export class OrderGenerator{
       urgent,
       simulatedAssigned,
     },managerId);
+    const point=await this.addressProvider?.geocodeAddress(resolved.address,resolved.regionLabel);
+    if(point)order=this.db.updateOrderLocation(order.id,point);
+    return order;
   }
 
   async advance(order,managerId){
