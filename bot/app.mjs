@@ -198,11 +198,13 @@ export class BotApp{
   async showWorkers(chatId){
     const list=this.db.listWorkers();if(!list.length)return this.safeSend(chatId,'Активных грузчиков нет.',{reply_markup:managerMenu});
     for(const worker of list){
+      const geo=this.db.getRegionGeo(worker.region);
+      const label=geo?.label||regionLabel(worker.region);
       const rows=[
         [{text:worker.contractor_type==='ip'?'✅ ИП':'Сделать ИП',callback_data:`worker_type:${worker.telegram_id}:ip`},{text:worker.contractor_type==='self_employed'?'✅ Самозанятый':'Самозанятый',callback_data:`worker_type:${worker.telegram_id}:self_employed`}],
-        ...Object.keys(REGIONS).map(key=>[{text:`${worker.region===key?'✅ ':''}${regionLabel(key)}`,callback_data:`worker_region:${worker.telegram_id}:${key}`}]),
+        [{text:'📍 Изменить регион / город',callback_data:`worker_region_custom:${worker.telegram_id}`}],
       ];
-      await this.safeSend(chatId,workerProfileText({...worker,region:regionLabel(worker.region)}),{reply_markup:inline(rows)});
+      await this.safeSend(chatId,workerProfileText({...worker,region:label}),{reply_markup:inline(rows)});
     }
   }
   async showAccess(chatId){const list=this.db.listPendingAccess();if(!list.length)return this.safeSend(chatId,'Новых заявок на доступ нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,accessText(item),{reply_markup:decisionKeyboard('access_decide',item.id)});}
@@ -220,13 +222,14 @@ export class BotApp{
     if(data==='access_start')return this.beginAccess(chatId,user);
     if(data==='order_publish'&&this.isManager(user)){
       const session=this.db.getSession(user.telegram_id);if(!session||session.flow!=='order'||session.step!=='confirm')return this.menu(chatId,user,'Черновик не найден. Создайте заказ заново.');
-      const payload={...session.data,region:regionKeyByCity(session.data.city)};const order=this.db.createOrder(payload,user.telegram_id);this.db.clearSession(user.telegram_id);await this.broadcastRegionOrder(order);return this.menu(chatId,user,`Заказ №${order.id} опубликован и разослан грузчикам ${order.region?'региона '+regionLabel(order.region):'по доступной базе'}.`);
+      let region=regionKeyByCity(session.data.city),label=session.data.city;if(this.addressProvider){const geo=await this.addressProvider.resolveRegion(session.data.city);if(geo){region=geo.region_key;label=geo.label;}}const payload={...session.data,region,city:label};const order=this.db.createOrder(payload,user.telegram_id);this.db.clearSession(user.telegram_id);await this.broadcastRegionOrder(order);return this.menu(chatId,user,`Заказ №${order.id} опубликован и разослан грузчикам ${order.region?'региона '+e(label):'по доступной базе'}.`);
     }
     let match=data.match(/^access_decide:(\d+):(approve|decline)$/);if(match&&this.isManager(user)){
       const result=this.db.decideAccess(Number(match[1]),user.telegram_id,match[2]==='approve');if(!result)return this.safeSend(chatId,'Заявка уже обработана.');
-      if(match[2]==='approve'){const region=regionKeyByCity(result.city);if(region)this.db.updateWorkerProfile(result.user_id,{region});}
+      if(match[2]==='approve'){let region=regionKeyByCity(result.city);if(this.addressProvider){const geo=await this.addressProvider.resolveRegion(result.city);if(geo)region=geo.region_key;}if(region)this.db.updateWorkerProfile(result.user_id,{region});}
       await this.safeSend(result.user_id,match[2]==='approve'?'<b>Доступ выдан!</b> Теперь вам доступны заказы, смены и личный кабинет.':'Заявка отклонена. Уточнить причину можно у @AleshaPopovichManager',{reply_markup:match[2]==='approve'?workerMenu:removeKeyboard()});return this.safeSend(chatId,`Заявка №${result.id}: ${match[2]==='approve'?'доступ выдан':'отклонена'}.`);
     }
+    match=data.match(/^worker_region_custom:(\d+)$/);if(match&&this.isManager(user)){const worker=this.db.getUser(match[1]);if(!worker)return this.safeSend(chatId,'Грузчик не найден.');this.db.setSession(user.telegram_id,'worker_region','input',{workerId:worker.telegram_id});return this.safeSend(chatId,`Введите любой город, область, край или республику России для ${e(worker.first_name||worker.username||worker.telegram_id)}. Например: «Самара», «Краснодарский край», «Республика Татарстан».`,{reply_markup:removeKeyboard()});}
     match=data.match(/^worker_type:(\d+):(ip|self_employed)$/);if(match&&this.isManager(user)){const worker=this.db.updateWorkerProfile(match[1],{contractorType:match[2]});return this.safeSend(chatId,worker?`${worker.first_name||worker.username||worker.telegram_id}: оформление — ${worker.contractor_type==='ip'?'ИП (повышенная ставка)':'самозанятый'}.`:'Грузчик не найден.');}
     match=data.match(/^worker_region:(\d+):([a-z_]+)$/);if(match&&this.isManager(user)){if(!REGIONS[match[2]])return this.safeSend(chatId,'Неизвестный регион.');const worker=this.db.updateWorkerProfile(match[1],{region:match[2]});return this.safeSend(chatId,worker?`${worker.first_name||worker.username||worker.telegram_id}: регион — ${regionLabel(worker.region)}.`:'Грузчик не найден.');}
     match=data.match(/^order_apply:(\d+)$/);if(match&&this.isWorker(user)){
