@@ -11,20 +11,37 @@ export const managerMenu=reply([
   ['➕ Создать заказ','📋 Заказы'],
   ['🔑 Доступы','👷 Отклики'],
   ['✅ Подтвердить смены','💸 Выплаты'],
-  ['📊 Статистика','🆘 Помощь'],
+  ['👥 Грузчики','📊 Статистика'],
+  ['🆘 Помощь'],
 ]);
 
-export function orderText(order,{manager=false,assigned=false}={}){
-  const places=Math.max(0,Number(order.people_needed)-Number(order.assigned_count||0));
+export function orderText(order,{manager=false,assigned=false,worker=null}={}){
+  const real=Number(order.assigned_count||0),simulated=Number(order.simulated_assigned||0);
+  const occupied=real+simulated;
+  const places=Math.max(0,Number(order.people_needed)-occupied);
+  const contractorType=worker?.contractor_type||'self_employed';
+  const selfRate=Number(order.self_employed_rate)||450;
+  const ipRate=Math.max(550,Number(order.ip_rate)||550);
+  const workerRate=contractorType==='ip'?ipRate:selfRate;
+  const workerTotal=Math.round(workerRate*Number(order.duration_hours||0));
+  const ipBonus=Math.max(0,ipRate-selfRate);
   return [
+    order.urgent?'<b>🔥 СРОЧНЫЙ ЗАКАЗ</b>':null,
+    order.generated?'<i>🤖 Автосформированный заказ</i>':null,
     `<b>📦 Заказ №${order.id}: ${e(order.title)}</b>`,
     `📍 ${e(order.city)}`,
     assigned||manager?`🏠 ${e(order.address)}`:null,
     `🕒 ${formatDate(order.starts_at)}`,
     `⏱ Ориентир: ${hours(order.duration_hours)}`,
-    `💰 ${money(order.amount)} за смену`,
+    manager?`💰 Самозанятые: ${money(selfRate)}/ч`:null,
+    manager?`⭐ ИП: ${money(ipRate)}/ч`:null,
+    worker?`${contractorType==='ip'?'⭐ ИП':'💰 Самозанятый'}: <b>${money(workerRate)}/ч</b> · ориентир ${money(workerTotal)}`:null,
+    worker&&contractorType!=='ip'&&ipBonus>0?`💼 С ИП ставка на этом заказе выше на ${money(ipBonus)}/ч — ${money(ipRate)}/ч.`:null,
+    !worker&&!manager?`💰 От ${money(selfRate)}/ч · для ИП ${money(ipRate)}/ч`:null,
     `👥 Свободно мест: ${places} из ${order.people_needed}`,
+    manager&&simulated?`🧪 Демо-заполнение: ${simulated}; реальных назначено: ${real}`:null,
     order.description?`\n${e(short(order.description,500))}`:null,
+    order.generated?'🗺 Геоданные: © OpenStreetMap contributors':null,
     !assigned&&!manager?'\nТочный адрес появится после назначения.':null,
   ].filter(Boolean).join('\n');
 }
@@ -37,6 +54,13 @@ export function orderKeyboard(order,{manager=false,applied=false,applicationId=n
   if(applied)return inline([[{text:'Отозвать отклик',callback_data:`application_withdraw:${applicationId}`}]]);
   return inline([[{text:'Откликнуться',callback_data:`order_apply:${order.id}`}]]);
 }
+
+export function workerProfileText(user){return [
+  `<b>👷 ${e(fullName(user))}</b>`,
+  user.username?`@${e(user.username)}`:null,
+  `📍 Регион: ${e(user.region||'не назначен')}`,
+  `💼 Оформление: ${user.contractor_type==='ip'?'ИП — повышенная ставка':'Самозанятый — базовая ставка'}`,
+].filter(Boolean).join('\n');}
 
 export function applicationText(item){return [
   `<b>👷 Отклик №${item.id}</b>`,
