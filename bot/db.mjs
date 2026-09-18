@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const now=()=>new Date().toISOString();
@@ -7,8 +8,29 @@ const num=value=>Number(value);
 
 export class BotDatabase {
   constructor(filename=':memory:'){
-    if(filename!==':memory:')fs.mkdirSync(path.dirname(path.resolve(filename)),{recursive:true});
-    this.db=new DatabaseSync(filename);
+    if(filename===':memory:'){
+      this.filename=filename;
+      this.db=new DatabaseSync(filename);
+    }else{
+      const candidates=[filename,path.resolve('data/bot.sqlite'),path.join(os.tmpdir(),'alesha-popovich-bot.sqlite')]
+        .map(candidate=>path.resolve(candidate))
+        .filter((candidate,index,list)=>list.indexOf(candidate)===index);
+      const errors=[];
+      for(const candidate of candidates){
+        try{
+          const directory=path.dirname(candidate);
+          fs.mkdirSync(directory,{recursive:true});
+          fs.accessSync(directory,fs.constants.W_OK);
+          this.db=new DatabaseSync(candidate);
+          this.filename=candidate;
+          break;
+        }catch(error){
+          errors.push(new Error(`${candidate}: ${error.message}`,{cause:error}));
+        }
+      }
+      if(!this.db)throw new AggregateError(errors,'Не удалось открыть SQLite ни в одном доступном каталоге.');
+      if(this.filename!==path.resolve(filename))console.warn(`Каталог базы ${filename} недоступен. Используется ${this.filename}`);
+    }
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
     this.migrate();
   }

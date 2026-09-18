@@ -34,7 +34,7 @@ await telegram.setCommands([
 ]);
 
 if(!adminIds.length)console.warn('BOT_ADMIN_IDS пуст. После /start бот покажет Telegram ID; добавьте его в .env и перезапустите бот.');
-console.log(`Бот запущен. Менеджеров: ${adminIds.length}. База: ${process.env.BOT_DB_PATH||'data/bot.sqlite'}`);
+console.log(`Бот запущен. Менеджеров: ${adminIds.length}. База: ${db.filename}`);
 
 const reminders=setInterval(()=>app.sendReminders(reminderMinutes).catch(error=>console.error('Ошибка напоминаний:',error)),5*60_000);
 reminders.unref();
