@@ -2,6 +2,14 @@ import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderTe
 import {REGIONS,regionKeyByCity,regionLabel} from './regions.mjs';
 import {decimal,escapeHtml as e,inline,int,money,parseMoscowDate,removeKeyboard} from './utils.mjs';
 
+const distanceKm=(aLat,aLon,bLat,bLon)=>{
+  const values=[aLat,aLon,bLat,bLon].map(Number);if(!values.every(Number.isFinite))return null;
+  const [lat1,lon1,lat2,lon2]=values.map(value=>value*Math.PI/180);
+  const dLat=lat2-lat1,dLon=lon2-lon1;
+  const h=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+  return 6371*2*Math.asin(Math.sqrt(h));
+};
+
 const decisionKeyboard=(kind,id,yes='Одобрить',no='Отклонить')=>inline([[
   {text:`✅ ${yes}`,callback_data:`${kind}:${id}:approve`},
   {text:`❌ ${no}`,callback_data:`${kind}:${id}:decline`},
@@ -17,7 +25,8 @@ export class BotApp{
   async notifyManagers(text,options={}){for(const manager of this.db.listManagers())await this.safeSend(manager.telegram_id,text,options);}
   async broadcastWorkers(text,options={}){for(const worker of this.db.listActiveWorkers())await this.safeSend(worker.telegram_id,text,options);}
   async sendOrderToWorker(worker,order,{save=false}={}){
-    const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});
+    const distance=distanceKm(worker.latitude,worker.longitude,order.latitude,order.longitude);
+    const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker,distanceKm:distance}),{reply_markup:orderKeyboard(order)});
     if(save&&sent?.message_id)this.db.saveOrderMessage(order.id,worker.telegram_id,sent.message_id);
     return sent;
   }
@@ -30,7 +39,8 @@ export class BotApp{
     const order=this.db.getOrder(orderId);if(!order)return;
     for(const item of this.db.listOrderMessages(orderId)){
       const worker=this.db.getUser(item.user_id);if(!worker)continue;
-      try{await this.tg.editMessage(item.user_id,item.message_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});}catch(error){this.log.warn?.('Не удалось обновить сообщение заказа:',error.message);}
+      const distance=distanceKm(worker.latitude,worker.longitude,order.latitude,order.longitude);
+      try{await this.tg.editMessage(item.user_id,item.message_id,orderText(order,{worker,distanceKm:distance}),{reply_markup:orderKeyboard(order)});}catch(error){this.log.warn?.('Не удалось обновить сообщение заказа:',error.message);}
     }
   }
 
@@ -54,11 +64,17 @@ export class BotApp{
       user=this.db.getUser(user.telegram_id);
     }
     const chatId=message.chat.id;
+    if(message.location&&this.isWorker(user)){
+      const updated=this.db.updateUserLocation(user.telegram_id,message.location);
+      if(!updated)return this.safeSend(chatId,'Не удалось сохранить геопозицию.',{reply_markup:this.menuFor(user)});
+      return this.menu(chatId,updated,'📍 Геопозиция обновлена. В активных заказах теперь будет показано примерное расстояние до адреса.');
+    }
     const text=String(message.text||'').trim();
     if(text==='/cancel'||text==='Отмена'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(text.startsWith('/start'))return this.start(chatId,user);
     if(text==='/menu')return this.isManager(user)||this.hasBotAccess(user)?this.menu(chatId,user):this.start(chatId,user);
     if(text==='/help'||text==='🆘 Помощь')return this.isManager(user)||this.hasBotAccess(user)?this.help(chatId,user):this.start(chatId,user);
+    if(text==='📍 Обновить геопозицию')return this.menu(chatId,user,'Нажмите кнопку геопозиции в меню и разрешите Telegram отправить текущую точку.');
     const session=this.db.getSession(user.telegram_id);
     if(session)return this.handleSession(message,user,session);
     if(!this.isManager(user)&&!this.isWorker(user))return this.start(chatId,user);
@@ -170,7 +186,7 @@ export class BotApp{
     const chatId=message.chat.id,data={...session.data};
     const next=(step,prompt)=>{this.db.setSession(user.telegram_id,'order',step,data);return this.safeSend(chatId,prompt);};
     if(session.step==='title'){if(text.length<3)return this.safeSend(chatId,'Название слишком короткое.');data.title=text;return next('city','Город выполнения заказа?');}
-    if(session.step==='city'){if(text.length<2)return this.safeSend(chatId,'Укажите город.');data.city=text;return next('address','Введите точный адрес. Его увидят только назначенные грузчики.');}
+    if(session.step==='city'){if(text.length<2)return this.safeSend(chatId,'Укажите город.');data.city=text;return next('address','Введите точный адрес. Он будет показан грузчикам в активном заказе.');}
     if(session.step==='address'){if(text.length<5)return this.safeSend(chatId,'Укажите адрес подробнее.');data.address=text;return next('startsAt','Дата и время по Москве в формате <b>ДД.ММ.ГГГГ ЧЧ:ММ</b>.');}
     if(session.step==='startsAt'){const value=parseMoscowDate(text);if(!value||new Date(value)<=new Date())return this.safeSend(chatId,'Нужны корректные будущие дата и время, например: 21.09.2026 09:30');data.startsAt=value;return next('duration','Ориентировочная длительность в часах?');}
     if(session.step==='duration'){const value=decimal(text,{min:.5,max:48});if(value==null)return this.safeSend(chatId,'Введите число от 0,5 до 48.');data.durationHours=value;return next('people','Сколько грузчиков нужно?');}
@@ -230,7 +246,7 @@ export class BotApp{
     const orders=this.isVerifiedWorker(user)?this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city}):this.db.listActiveOrders();if(!orders.length)return this.menu(chatId,user,'Сейчас активных заказов нет.');
     await this.safeSend(chatId,`<b>Активные заказы: ${orders.length}</b>`,{reply_markup:this.menuFor(user)});
     const apps=this.isVerifiedWorker(user)?new Map(this.db.listUserApplications(user.telegram_id,50).map(item=>[item.order_id,item])):new Map();
-    for(const order of orders){const app=apps.get(order.id);await this.safeSend(chatId,orderText(order,{worker:user}),{reply_markup:this.isVerifiedWorker(user)?orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id}):this.menuFor(user)});}
+    for(const order of orders){const app=apps.get(order.id);const distance=distanceKm(user.latitude,user.longitude,order.latitude,order.longitude);await this.safeSend(chatId,orderText(order,{worker:user,distanceKm:distance}),{reply_markup:this.isVerifiedWorker(user)?orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id}):this.menuFor(user)});}
   }
   async showManagedOrders(chatId){const list=this.db.listManagedOrders();if(!list.length)return this.safeSend(chatId,'Активных заказов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,orderText(item,{manager:true}),{reply_markup:orderKeyboard(item,{manager:true})});}
   async showWorkers(chatId){
@@ -271,7 +287,7 @@ export class BotApp{
     if(data==='access_start')return this.beginAccess(chatId,user);
     if(data==='order_publish'&&this.isManager(user)){
       const session=this.db.getSession(user.telegram_id);if(!session||session.flow!=='order'||session.step!=='confirm')return this.menu(chatId,user,'Черновик не найден. Создайте заказ заново.');
-      let region=regionKeyByCity(session.data.city),label=session.data.city;if(this.addressProvider){const geo=await this.addressProvider.resolveRegion(session.data.city);if(geo){region=geo.region_key;label=geo.label;}}const payload={...session.data,region,city:label};const order=this.db.createOrder(payload,user.telegram_id);this.db.clearSession(user.telegram_id);await this.broadcastRegionOrder(order);return this.menu(chatId,user,`Заказ №${order.id} опубликован и разослан грузчикам ${order.region?'региона '+e(label):'по доступной базе'}.`);
+      let region=regionKeyByCity(session.data.city),label=session.data.city;if(this.addressProvider){const geo=await this.addressProvider.resolveRegion(session.data.city);if(geo){region=geo.region_key;label=geo.label;}}const payload={...session.data,region,city:label};let order=this.db.createOrder(payload,user.telegram_id);if(this.addressProvider){const point=await this.addressProvider.geocodeAddress(session.data.address,session.data.city);if(point)order=this.db.updateOrderLocation(order.id,point);}this.db.clearSession(user.telegram_id);await this.broadcastRegionOrder(order);return this.menu(chatId,user,`Заказ №${order.id} опубликован и разослан грузчикам ${order.region?'региона '+e(label):'по доступной базе'}.`);
     }
     let match=data.match(/^access_decide:(\d+):(approve|decline)$/);if(match&&this.isManager(user)){
       const result=this.db.decideAccess(Number(match[1]),user.telegram_id,match[2]==='approve');if(!result)return this.safeSend(chatId,'Заявка уже обработана.');
