@@ -26,12 +26,16 @@ const app=new BotApp({db,telegram});
 const controller=new AbortController();
 const reminderMinutes=Number(process.env.BOT_REMINDER_MINUTES)||120;
 
-await telegram.setCommands([
-  {command:'start',description:'Открыть бот'},
-  {command:'menu',description:'Главное меню'},
-  {command:'cancel',description:'Отменить текущий ввод'},
-  {command:'help',description:'Помощь'},
-]);
+try{
+  await telegram.setCommands([
+    {command:'start',description:'Открыть бот'},
+    {command:'menu',description:'Главное меню'},
+    {command:'cancel',description:'Отменить текущий ввод'},
+    {command:'help',description:'Помощь'},
+  ]);
+}catch(error){
+  console.warn('Telegram временно недоступен при настройке команд. Бот продолжит подключение:',error.message);
+}
 
 if(!adminIds.length)console.warn('BOT_ADMIN_IDS пуст. После /start бот покажет Telegram ID; добавьте его в .env и перезапустите бот.');
 console.log(`Бот запущен. Менеджеров: ${adminIds.length}. База: ${db.filename}`);
