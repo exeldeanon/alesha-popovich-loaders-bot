@@ -2,14 +2,6 @@ import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderTe
 import {REGIONS,regionKeyByCity,regionLabel} from './regions.mjs';
 import {decimal,escapeHtml as e,inline,int,money,parseMoscowDate,removeKeyboard} from './utils.mjs';
 
-const distanceKm=(aLat,aLon,bLat,bLon)=>{
-  const values=[aLat,aLon,bLat,bLon].map(Number);if(!values.every(Number.isFinite))return null;
-  const [lat1,lon1,lat2,lon2]=values.map(value=>value*Math.PI/180);
-  const dLat=lat2-lat1,dLon=lon2-lon1;
-  const h=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
-  return 6371*2*Math.asin(Math.sqrt(h));
-};
-
 const decisionKeyboard=(kind,id,yes='Одобрить',no='Отклонить')=>inline([[
   {text:`✅ ${yes}`,callback_data:`${kind}:${id}:approve`},
   {text:`❌ ${no}`,callback_data:`${kind}:${id}:decline`},
@@ -25,8 +17,7 @@ export class BotApp{
   async notifyManagers(text,options={}){for(const manager of this.db.listManagers())await this.safeSend(manager.telegram_id,text,options);}
   async broadcastWorkers(text,options={}){for(const worker of this.db.listActiveWorkers())await this.safeSend(worker.telegram_id,text,options);}
   async sendOrderToWorker(worker,order,{save=false}={}){
-    const distance=distanceKm(worker.latitude,worker.longitude,order.latitude,order.longitude);
-    const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker,distanceKm:distance}),{reply_markup:orderKeyboard(order)});
+    const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});
     if(save&&sent?.message_id)this.db.saveOrderMessage(order.id,worker.telegram_id,sent.message_id);
     return sent;
   }
@@ -46,8 +37,7 @@ export class BotApp{
     const order=this.db.getOrder(orderId);if(!order)return;
     for(const item of this.db.listOrderMessages(orderId)){
       const worker=this.db.getUser(item.user_id);if(!worker)continue;
-      const distance=distanceKm(worker.latitude,worker.longitude,order.latitude,order.longitude);
-      try{await this.tg.editMessage(item.user_id,item.message_id,orderText(order,{worker,distanceKm:distance}),{reply_markup:orderKeyboard(order)});}catch(error){this.log.warn?.('Не удалось обновить сообщение заказа:',error.message);}
+      try{await this.tg.editMessage(item.user_id,item.message_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});}catch(error){this.log.warn?.('Не удалось обновить сообщение заказа:',error.message);}
     }
   }
 
@@ -77,16 +67,12 @@ export class BotApp{
       this.db.logWorkerAction(user.telegram_id,message.location?'location':'message',{text:message.location?'Отправил геопозицию':(text||'[без текста]')});
       if(user.maintenance_mode===1)return this.safeSend(chatId,'🛠 <b>Сейчас идут технические работы.</b>\nБот временно недоступен. Попробуйте позже.',{reply_markup:this.menuFor(user)});
     }
-    if(message.location&&this.isWorker(user)){
-      const updated=this.db.updateUserLocation(user.telegram_id,message.location);
-      if(!updated)return this.safeSend(chatId,'Не удалось сохранить геопозицию.',{reply_markup:this.menuFor(user)});
-      return this.menu(chatId,updated,'📍 Геопозиция обновлена. В активных заказах теперь будет показано примерное расстояние до адреса.');
-    }
+    if(message.location&&this.isWorker(user))return this.menu(chatId,user,'Геопозиция больше не требуется. Откройте активный заказ и нажмите «🗺 Посмотреть на карте».');
     if(text==='/cancel'||text==='Отмена'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(text.startsWith('/start'))return this.start(chatId,user);
     if(text==='/menu')return this.isManager(user)||this.hasBotAccess(user)?this.menu(chatId,user):this.start(chatId,user);
     if(text==='/help'||text==='🆘 Помощь')return this.isManager(user)||this.hasBotAccess(user)?this.help(chatId,user):this.start(chatId,user);
-    if(text==='📍 Обновить геопозицию')return this.menu(chatId,user,'Нажмите кнопку геопозиции в меню и разрешите Telegram отправить текущую точку.');
+    if(text==='📍 Обновить геопозицию')return this.menu(chatId,user,'Геопозиция больше не требуется. Откройте активный заказ и нажмите «🗺 Посмотреть на карте».');
     const session=this.db.getSession(user.telegram_id);
     if(session)return this.handleSession(message,user,session);
     if(!this.isManager(user)&&!this.isWorker(user))return this.start(chatId,user);
@@ -283,7 +269,7 @@ export class BotApp{
     const orders=this.isVerifiedWorker(user)?this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city,userId:user.telegram_id}):this.db.listActiveOrders({userId:user.telegram_id});if(!orders.length)return this.menu(chatId,user,'Сейчас активных заказов нет.');
     await this.safeSend(chatId,`<b>Активные заказы: ${orders.length}</b>`,{reply_markup:this.menuFor(user)});
     const apps=this.isVerifiedWorker(user)?new Map(this.db.listUserApplications(user.telegram_id,50).map(item=>[item.order_id,item])):new Map();
-    for(const order of orders){const app=apps.get(order.id);const distance=distanceKm(user.latitude,user.longitude,order.latitude,order.longitude);await this.safeSend(chatId,orderText(order,{worker:user,distanceKm:distance}),{reply_markup:this.isVerifiedWorker(user)?orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id}):this.menuFor(user)});}
+    for(const order of orders){const app=apps.get(order.id);await this.safeSend(chatId,orderText(order,{worker:user}),{reply_markup:orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id,canApply:this.isVerifiedWorker(user)})});}
   }
   async showManagedOrders(chatId){const list=this.db.listManagedOrders();if(!list.length)return this.safeSend(chatId,'Активных заказов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,orderText(item,{manager:true}),{reply_markup:orderKeyboard(item,{manager:true})});}
   async showWorkers(chatId){
