@@ -3,6 +3,7 @@ import process from 'node:process';
 import {BotDatabase} from './db.mjs';
 import {TelegramClient} from './telegram.mjs';
 import {BotApp} from './app.mjs';
+import {OrderGenerator} from './order-generator.mjs';
 
 function loadEnv(filename='.env'){
   if(!fs.existsSync(filename))return;
@@ -26,6 +27,7 @@ const telegram=new TelegramClient(token);
 const app=new BotApp({db,telegram,adminUsernames});
 const controller=new AbortController();
 const reminderMinutes=Number(process.env.BOT_REMINDER_MINUTES)||120;
+const generator=new OrderGenerator({db,app});
 
 try{
   await telegram.setCommands([
@@ -43,6 +45,9 @@ console.log(`Бот запущен. Менеджеров по ID: ${adminIds.len
 
 const reminders=setInterval(()=>app.sendReminders(reminderMinutes).catch(error=>console.error('Ошибка напоминаний:',error)),5*60_000);
 reminders.unref();
+const autoOrders=setInterval(()=>generator.tick().catch(error=>console.error('Ошибка генератора заказов:',error)),60_000);
+autoOrders.unref();
+generator.tick().catch(error=>console.error('Ошибка первого запуска генератора:',error));
 
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>controller.abort());
 
@@ -55,4 +60,4 @@ while(!controller.signal.aborted){
   }
 }
 
-clearInterval(reminders);db.close();console.log('Бот остановлен.');
+clearInterval(reminders);clearInterval(autoOrders);db.close();console.log('Бот остановлен.');
