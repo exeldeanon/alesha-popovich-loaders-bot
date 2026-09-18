@@ -29,6 +29,7 @@ const addressProvider=new AddressProvider({db});
 const app=new BotApp({db,telegram,addressProvider,adminUsernames});
 const controller=new AbortController();
 const reminderMinutes=Number(process.env.BOT_REMINDER_MINUTES)||120;
+const orderNudgeMinutes=Math.max(10,Number(process.env.BOT_ORDER_NUDGE_MINUTES)||45);
 const generator=new OrderGenerator({db,app,addressProvider});
 
 try{
@@ -49,6 +50,8 @@ const reminders=setInterval(()=>app.sendReminders(reminderMinutes).catch(error=>
 reminders.unref();
 const autoOrders=setInterval(()=>generator.tick().catch(error=>console.error('Ошибка генератора заказов:',error)),60_000);
 autoOrders.unref();
+const orderNudges=setInterval(()=>app.sendOrderNudges(orderNudgeMinutes).catch(error=>console.error('Ошибка подгоняющей рассылки:',error)),5*60_000);
+orderNudges.unref();
 generator.tick().catch(error=>console.error('Ошибка первого запуска генератора:',error));
 
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>controller.abort());
@@ -62,4 +65,4 @@ while(!controller.signal.aborted){
   }
 }
 
-clearInterval(reminders);clearInterval(autoOrders);db.close();console.log('Бот остановлен.');
+clearInterval(reminders);clearInterval(autoOrders);clearInterval(orderNudges);db.close();console.log('Бот остановлен.');

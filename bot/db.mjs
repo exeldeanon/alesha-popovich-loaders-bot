@@ -169,6 +169,8 @@ export class BotDatabase {
     addColumn('users','can_create_orders',"INTEGER NOT NULL DEFAULT 0 CHECK(can_create_orders IN (0,1))");
     addColumn('users','maintenance_mode',"INTEGER NOT NULL DEFAULT 0 CHECK(maintenance_mode IN (0,1))");
     addColumn('users','action_logging',"INTEGER NOT NULL DEFAULT 0 CHECK(action_logging IN (0,1))");
+    addColumn('users','order_nudges',"INTEGER NOT NULL DEFAULT 1 CHECK(order_nudges IN (0,1))");
+    addColumn('users','last_order_nudge_at',"TEXT");
     this.db.prepare("UPDATE users SET verified=1 WHERE status='active' AND (role='manager' OR (role='worker' AND region<>''))").run();
     addColumn('orders','region',"TEXT NOT NULL DEFAULT ''");
     addColumn('orders','self_employed_rate',"INTEGER NOT NULL DEFAULT 450");
@@ -243,6 +245,8 @@ export class BotDatabase {
   listManagers(){return this.db.prepare("SELECT * FROM users WHERE role='manager' AND status='active'").all();}
   getGeneratorManagerId(){return this.listManagers()[0]?.telegram_id||null;}
   toggleNotifications(id){this.db.prepare('UPDATE users SET notifications=1-notifications,updated_at=? WHERE telegram_id=?').run(now(),String(id));return this.getUser(id);}
+  setOrderNudges(id,enabled){const value=enabled?1:0,stamp=now();this.db.prepare('UPDATE users SET order_nudges=?,last_order_nudge_at=CASE WHEN ?=1 THEN ? ELSE last_order_nudge_at END,updated_at=? WHERE telegram_id=?').run(value,value,stamp,stamp,String(id));return this.getUser(id);}
+  markOrderNudgeSent(id){const stamp=now();this.db.prepare('UPDATE users SET last_order_nudge_at=?,updated_at=? WHERE telegram_id=?').run(stamp,stamp,String(id));return this.getUser(id);}
   updateWorkerSettings(userId,changes={}){
     const user=this.getUser(userId);if(!user||user.role!=='worker')return null;
     const frequency=changes.autoOrdersPerHour===undefined?Number(user.auto_orders_per_hour):Math.min(60,Math.max(0,Number(changes.autoOrdersPerHour)||0));
