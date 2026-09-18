@@ -16,7 +16,8 @@ export class BotApp{
   async safeSend(chatId,text,options={}){try{return await this.tg.sendMessage(chatId,text,options);}catch(error){this.log.error?.(`Не удалось отправить сообщение ${chatId}:`,error.message);return null;}}
   async notifyManagers(text,options={}){for(const manager of this.db.listManagers())await this.safeSend(manager.telegram_id,text,options);}
   async broadcastWorkers(text,options={}){for(const worker of this.db.listActiveWorkers())await this.safeSend(worker.telegram_id,text,options);}
-  async sendOrderToWorker(worker,order,{save=false}={}){
+  async sendOrderToWorker(worker,order,{save=false,notification=true}={}){
+    if(notification&&!this.canPush(worker,'new_order'))return null;
     const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});
     if(save&&sent?.message_id)this.db.saveOrderMessage(order.id,worker.telegram_id,sent.message_id);
     return sent;
@@ -28,7 +29,7 @@ export class BotApp{
   async publishGeneratedOrder(order){
     if(order.target_user_id){
       const worker=this.db.getUser(order.target_user_id);
-      if(worker&&worker.status==='active'&&worker.verified===1&&worker.notifications===1&&worker.maintenance_mode!==1)return this.sendOrderToWorker(worker,order,{save:true});
+      if(worker&&worker.status==='active'&&worker.verified===1)return this.sendOrderToWorker(worker,order,{save:true,notification:true});
       return null;
     }
     return this.broadcastRegionOrder(order,{save:true});
