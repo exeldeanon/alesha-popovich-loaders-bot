@@ -8,6 +8,15 @@ export const workerMenu=reply([
   ['🆘 Помощь'],
 ]);
 
+export const workerCreatorMenu=reply([
+  ['📦 Активные заказы','🗓 Мои смены'],
+  ['➕ Создать заказ'],
+  ['💰 Личный кабинет','📜 История смен'],
+  ['💸 Запросить выплату','🔔 Уведомления'],
+  [{text:'📍 Обновить геопозицию',request_location:true}],
+  ['🆘 Помощь'],
+]);
+
 export const unverifiedWorkerMenu=reply([
   ['📦 Активные заказы'],
   ['💰 Личный кабинет'],
@@ -79,6 +88,27 @@ export function workerProfileText(user){return [
   `📍 Регион: ${e(user.region||'не назначен')}`,
   `💼 Статус: ${verificationStatus(user)}`,
 ].filter(Boolean).join('\n');}
+
+export function workerSettingsText(user){return [
+  `<b>⚙️ Настройки грузчика: ${e(fullName(user))}</b>`,
+  `🕒 Частота автозаказов: <b>${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1}).format(Number(user.auto_orders_per_hour)||0)}/ч</b>`,
+  `🔥 Шанс срочного заказа: <b>${Math.round((Number(user.urgent_order_chance)||0)*100)}%</b>`,
+  `➕ Создание заказов: <b>${user.can_create_orders===1?'разрешено':'запрещено'}</b>`,
+  `🛠 Техработы: <b>${user.maintenance_mode===1?'включены':'выключены'}</b>`,
+  `📝 Логирование действий: <b>${user.action_logging===1?'включено':'выключено'}</b>`,
+].join('\n');}
+
+export function workerLogsText(user,logs){
+  const label=fullName(user);
+  if(!logs.length)return `<b>📝 Логи: ${e(label)}</b>\nЗаписей пока нет.`;
+  const lines=logs.map(item=>{
+    let details={};try{details=JSON.parse(item.details||'{}');}catch{}
+    const action=item.action?.replace(/^worker\.ui\./,'')||item.action;
+    const value=details.text||details.data||details.kind||'';
+    return `${formatDate(item.created_at)} · <code>${e(action)}</code>${value?` · ${e(short(value,80))}`:''}`;
+  });
+  return [`<b>📝 Последние действия: ${e(label)}</b>`,...lines].join('\n');
+}
 
 export function applicationText(item){
   const rate=item.contractor_type==='ip'?Math.max(550,Number(item.ip_rate)||550):(Number(item.self_employed_rate)||450);
