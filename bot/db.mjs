@@ -294,7 +294,10 @@ export class BotDatabase {
   decideApplication(id,managerId,approved){
     return this.transaction(()=>{
       const app=this.getApplication(id);if(!app||app.status!=='pending')return null;
-      if(approved){const order=this.getOrder(app.order_id);if(!order||order.status!=='active'||Number(order.assigned_count)>=Number(order.people_needed))return {error:'full',...app};}
+      if(approved){
+        const worker=this.getUser(app.user_id);if(!worker||worker.role!=='worker'||worker.status!=='active'||worker.verified!==1||!worker.region)return {error:'access',...app};
+        const order=this.getOrder(app.order_id);if(!order||order.status!=='active'||Number(order.assigned_count)>=Number(order.people_needed))return {error:'full',...app};
+      }
       const status=approved?'approved':'declined';this.db.prepare('UPDATE applications SET status=?,updated_at=? WHERE id=?').run(status,now(),id);
       let shift=null;
       if(approved){const stamp=now();const orderBefore=this.getOrder(app.order_id);const worker=this.getUser(app.user_id);const rate=worker?.contractor_type==='ip'?Math.max(550,Number(orderBefore.ip_rate)||550):(Number(orderBefore.self_employed_rate)||450);const plannedAmount=Math.round(rate*Number(orderBefore.duration_hours));const result=this.db.prepare("INSERT INTO shifts(order_id,user_id,status,planned_amount,created_at,updated_at) VALUES(?,?,'assigned',?,?,?)").run(app.order_id,app.user_id,plannedAmount,stamp,stamp);if(Number(orderBefore.simulated_assigned)>0)this.db.prepare("UPDATE orders SET simulated_assigned=simulated_assigned-1,updated_at=? WHERE id=?").run(now(),app.order_id);shift=this.getShift(num(result.lastInsertRowid));const order=this.getOrder(app.order_id);if(Number(order.assigned_count)>=order.people_needed)this.db.prepare("UPDATE orders SET status='filled',updated_at=? WHERE id=?").run(now(),app.order_id);}
