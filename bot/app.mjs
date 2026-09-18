@@ -544,7 +544,7 @@ export class BotApp{
     }
     if(data==='cancel'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(data==='access_start')return this.beginAccess(chatId,user);
-    if(data==='user_settings_open'&&this.isWorker(user))return this.showUserSettings(chatId,user,{messageId:query.message?.message_id||null});
+    if(data==='user_settings_open'&&this.isWorker(user))return this.showUserSettings(chatId,user);
     if(data==='cabinet_withdraw'&&this.isWorker(user)){
       if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Выплаты доступны после верификации у менеджера.');
       return this.beginWithdrawal(chatId,user);
