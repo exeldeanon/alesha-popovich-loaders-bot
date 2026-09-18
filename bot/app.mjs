@@ -37,7 +37,7 @@ export class BotApp{
   async publishGeneratedOrder(order){
     if(order.target_user_id){
       const worker=this.db.getUser(order.target_user_id);
-      if(worker&&worker.status==='active'&&worker.verified===1&&worker.notifications===1)return this.sendOrderToWorker(worker,order,{save:true});
+      if(worker&&worker.status==='active'&&worker.verified===1&&worker.notifications===1&&worker.maintenance_mode!==1)return this.sendOrderToWorker(worker,order,{save:true});
       return null;
     }
     return this.broadcastRegionOrder(order,{save:true});
