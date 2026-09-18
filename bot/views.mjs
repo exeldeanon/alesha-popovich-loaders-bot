@@ -79,7 +79,7 @@ const orderMapUrl=order=>{
   return `https://yandex.ru/maps/?text=${encodeURIComponent(query)}`;
 };
 
-export function orderKeyboard(order,{manager=false,applied=false,applicationId=null}={}){
+export function orderKeyboard(order,{manager=false,applied=false,applicationId=null,canApply=true}={}){
   const mapButton={text:'🗺 Посмотреть на карте',url:orderMapUrl(order)};
   if(manager)return inline([
     [mapButton],
@@ -87,6 +87,7 @@ export function orderKeyboard(order,{manager=false,applied=false,applicationId=n
     [{text:'✅ Закрыть',callback_data:`order_status:${order.id}:closed`},{text:'⛔ Отменить',callback_data:`order_status:${order.id}:cancelled`}],
   ]);
   if(applied)return inline([[mapButton],[{text:'Отозвать отклик',callback_data:`application_withdraw:${applicationId}`}]]);
+  if(!canApply)return inline([[mapButton]]);
   return inline([[mapButton],[{text:'Откликнуться',callback_data:`order_apply:${order.id}`}]]);
 }
 
