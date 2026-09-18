@@ -161,6 +161,9 @@ export class BotDatabase {
     addColumn('users','region',"TEXT NOT NULL DEFAULT ''");
     addColumn('users','contractor_type',"TEXT NOT NULL DEFAULT 'self_employed' CHECK(contractor_type IN ('self_employed','ip'))");
     addColumn('users','verified',"INTEGER NOT NULL DEFAULT 0 CHECK(verified IN (0,1))");
+    addColumn('users','latitude',"REAL");
+    addColumn('users','longitude',"REAL");
+    addColumn('users','location_updated_at',"TEXT");
     this.db.prepare("UPDATE users SET verified=1 WHERE status='active' AND (role='manager' OR (role='worker' AND region<>''))").run();
     addColumn('orders','region',"TEXT NOT NULL DEFAULT ''");
     addColumn('orders','self_employed_rate',"INTEGER NOT NULL DEFAULT 450");
@@ -168,6 +171,8 @@ export class BotDatabase {
     addColumn('orders','generated',"INTEGER NOT NULL DEFAULT 0");
     addColumn('orders','urgent',"INTEGER NOT NULL DEFAULT 0");
     addColumn('orders','simulated_assigned',"INTEGER NOT NULL DEFAULT 0");
+    addColumn('orders','latitude',"REAL");
+    addColumn('orders','longitude',"REAL");
     addColumn('shifts','planned_amount',"INTEGER");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS order_messages(
@@ -231,6 +236,7 @@ export class BotDatabase {
   listManagers(){return this.db.prepare("SELECT * FROM users WHERE role='manager' AND status='active'").all();}
   getGeneratorManagerId(){return this.listManagers()[0]?.telegram_id||null;}
   toggleNotifications(id){this.db.prepare('UPDATE users SET notifications=1-notifications,updated_at=? WHERE telegram_id=?').run(now(),String(id));return this.getUser(id);}
+  updateUserLocation(id,{latitude,longitude}){const lat=Number(latitude),lon=Number(longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat < -90||lat > 90||lon < -180||lon > 180)return null;this.db.prepare('UPDATE users SET latitude=?,longitude=?,location_updated_at=?,updated_at=? WHERE telegram_id=?').run(lat,lon,now(),now(),String(id));return this.getUser(id);}
 
   createAccessRequest(userId,{name,city,experience}){
     return this.transaction(()=>{
@@ -300,6 +306,7 @@ export class BotDatabase {
     const id=num(result.lastInsertRowid);this.audit(managerId,'order.generated','order',id,data);return this.getOrder(id);
   }
   getOrder(id){return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.id=?`).get(id);}
+  updateOrderLocation(id,{latitude,longitude}){const lat=Number(latitude),lon=Number(longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat < -90||lat > 90||lon < -180||lon > 180)return this.getOrder(id);this.db.prepare('UPDATE orders SET latitude=?,longitude=?,updated_at=? WHERE id=?').run(lat,lon,now(),id);return this.getOrder(id);}
   listActiveOrders({city='',region='',limit=20}={}){
     if(region)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND o.region=? ORDER BY o.starts_at LIMIT ?`).all(region,limit);
     if(city)return this.db.prepare(`SELECT o.*,(SELECT COUNT(*) FROM shifts s WHERE s.order_id=o.id AND s.status NOT IN ('cancelled')) AS assigned_count FROM orders o WHERE o.status='active' AND lower(o.city)=lower(?) ORDER BY o.starts_at LIMIT ?`).all(city,limit);
@@ -319,8 +326,8 @@ export class BotDatabase {
     const user=this.getUser(userId);if(!user||user.status!=='active'||user.role!=='worker'||user.verified!==1||!user.region)return {error:'access'};
     try{const stamp=now();const result=this.db.prepare("INSERT INTO applications(order_id,user_id,status,created_at,updated_at) VALUES(?,?,'pending',?,?)").run(orderId,String(userId),stamp,stamp);const id=num(result.lastInsertRowid);this.audit(userId,'application.create','application',id,{orderId});return {application:this.getApplication(id)};}catch(error){if(String(error).includes('UNIQUE'))return {error:'duplicate'};throw error;}
   }
-  getApplication(id){return this.db.prepare(`SELECT a.*,o.title,o.city,o.address,o.starts_at,o.duration_hours,o.amount,o.people_needed,u.username,u.first_name,u.last_name,u.phone FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.id=?`).get(id);}
-  listPendingApplications(limit=30){return this.db.prepare(`SELECT a.*,o.title,o.city,o.starts_at,o.amount,u.username,u.first_name,u.last_name,u.phone FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.status='pending' ORDER BY a.created_at LIMIT ?`).all(limit);}
+  getApplication(id){return this.db.prepare(`SELECT a.*,o.title,o.city,o.address,o.starts_at,o.duration_hours,o.amount,o.people_needed,o.self_employed_rate,o.ip_rate,u.username,u.first_name,u.last_name,u.phone,u.contractor_type FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.id=?`).get(id);}
+  listPendingApplications(limit=30){return this.db.prepare(`SELECT a.*,o.title,o.city,o.starts_at,o.duration_hours,o.amount,o.self_employed_rate,o.ip_rate,u.username,u.first_name,u.last_name,u.phone,u.contractor_type FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.status='pending' ORDER BY a.created_at LIMIT ?`).all(limit);}
   listUserApplications(userId,limit=20){return this.db.prepare(`SELECT a.*,o.title,o.city,o.starts_at,o.amount FROM applications a JOIN orders o ON o.id=a.order_id WHERE a.user_id=? ORDER BY a.created_at DESC LIMIT ?`).all(String(userId),limit);}
   withdrawApplication(id,userId){const app=this.getApplication(id);if(!app||app.user_id!==String(userId)||app.status!=='pending')return null;this.db.prepare("UPDATE applications SET status='withdrawn',updated_at=? WHERE id=?").run(now(),id);this.audit(userId,'application.withdraw','application',id);return this.getApplication(id);}
   decideApplication(id,managerId,approved){
@@ -354,7 +361,7 @@ export class BotDatabase {
   createWithdrawal(userId,amount){const cabinet=this.getCabinet(userId);if(!Number.isInteger(amount)||amount<=0||amount>cabinet.available)return {error:'amount',cabinet};const result=this.db.prepare("INSERT INTO withdrawals(user_id,amount,status,created_at) VALUES(?,?,'pending',?)").run(String(userId),amount,now());const id=num(result.lastInsertRowid);this.audit(userId,'withdrawal.create','withdrawal',id,{amount});return {withdrawal:this.getWithdrawal(id)};}
   getWithdrawal(id){return this.db.prepare(`SELECT w.*,u.username,u.first_name,u.last_name,u.phone FROM withdrawals w JOIN users u ON u.telegram_id=w.user_id WHERE w.id=?`).get(id);}
   listPendingWithdrawals(limit=30){return this.db.prepare(`SELECT w.*,u.username,u.first_name,u.last_name,u.phone FROM withdrawals w JOIN users u ON u.telegram_id=w.user_id WHERE w.status='pending' ORDER BY w.created_at LIMIT ?`).all(limit);}
-  listOrderApplications(orderId,limit=30){return this.db.prepare(`SELECT a.*,o.title,o.city,o.starts_at,o.amount,u.username,u.first_name,u.last_name,u.phone FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.order_id=? AND a.status='pending' ORDER BY a.created_at LIMIT ?`).all(orderId,limit);}
+  listOrderApplications(orderId,limit=30){return this.db.prepare(`SELECT a.*,o.title,o.city,o.starts_at,o.duration_hours,o.amount,o.self_employed_rate,o.ip_rate,u.username,u.first_name,u.last_name,u.phone,u.contractor_type FROM applications a JOIN orders o ON o.id=a.order_id JOIN users u ON u.telegram_id=a.user_id WHERE a.order_id=? AND a.status='pending' ORDER BY a.created_at LIMIT ?`).all(orderId,limit);}
   decideWithdrawal(id,managerId,paid){const item=this.getWithdrawal(id);if(!item||item.status!=='pending')return null;const status=paid?'paid':'declined';this.db.prepare('UPDATE withdrawals SET status=?,decided_at=?,decided_by=? WHERE id=?').run(status,now(),String(managerId),id);this.audit(managerId,`withdrawal.${status}`,'withdrawal',id,{amount:item.amount});return {...item,status};}
 
   getRegionGeo(regionKey){return this.db.prepare("SELECT * FROM region_geo WHERE region_key=?").get(String(regionKey));}
