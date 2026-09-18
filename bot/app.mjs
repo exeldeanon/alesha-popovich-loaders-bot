@@ -135,7 +135,7 @@ export class BotApp{
   async help(chatId,user){
     const text=this.isManager(user)
       ?'<b>Помощь менеджеру</b>\nСоздавайте заказы, рассматривайте отклики и заявки на доступ, подтверждайте смены и выплаты. Любой ввод можно остановить командой /cancel.'
-      :'<b>Как пользоваться ботом</b>\n1. Откройте активные заказы и откликнитесь.\n2. После одобрения адрес появится в «Моих сменах».\n3. В день работы нажмите «Начать», после работы — «Завершить».\n4. Подтверждённая сумма попадёт в личный кабинет.\n\nПо организационным вопросам: @AleshaPopovichManager';
+      :'<b>Как пользоваться ботом</b>\n1. Откройте активные заказы и выберите подходящий.\n2. После назначения смена появится в «Моих сменах».\n3. В день работы нажмите «Начать», после работы — «Завершить».\n4. История смен и вывод денег находятся в «Личном кабинете».\n5. В «Настройках» можно выбрать удобное время работы, режим «Не беспокоить» и отдельно включать/выключать уведомления.\n\nПо организационным вопросам: @AleshaPopovichManager';
     return this.safeSend(chatId,text,{reply_markup:this.menuFor(user)});
   }
 
@@ -167,12 +167,11 @@ export class BotApp{
   async showCabinet(chatId,user){
     const geo=this.db.getRegionGeo(user.region);
     const cabinet=this.db.getCabinet(user.telegram_id);
-    return this.safeSend(chatId,cabinetText({...user,region:geo?.label||regionLabel(user.region)},cabinet),{reply_markup:inline([
-      [
-        {text:'💸 Вывести деньги',callback_data:'cabinet_withdraw'},
-        {text:'📜 История смен',callback_data:'cabinet_history'},
-      ],
-    ])});
+    const rows=this.isVerifiedWorker(user)?[[
+      {text:'💸 Вывести деньги',callback_data:'cabinet_withdraw'},
+      {text:'📜 История смен',callback_data:'cabinet_history'},
+    ]]:[];
+    return this.safeSend(chatId,cabinetText({...user,region:geo?.label||regionLabel(user.region)},cabinet),{reply_markup:rows.length?inline(rows):this.menuFor(user)});
   }
 
   async showUserSettings(chatId,user,{messageId=null,notice=''}={}){
@@ -394,7 +393,7 @@ export class BotApp{
     const safePage=Math.min(totalPages-1,Math.max(0,Number(page)||0));
     const text=[
       `<b>📦 Активные заказы: ${orders.length}</b>`,
-      'Выберите заказ. В каждой кнопке: адрес и ориентир выплаты.',
+      'Выберите заказ. В каждой кнопке: адрес, ориентир выплаты и сколько мест осталось.',
       '🔥 — срочный заказ.',
     ].join('\n');
     const visible=orders.slice(safePage*5,safePage*5+5);
