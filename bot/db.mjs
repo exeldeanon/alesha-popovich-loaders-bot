@@ -266,7 +266,7 @@ export class BotDatabase {
     const allowedTimes=['any','morning','day','evening'];
     const preference=changes.workTimePreference===undefined?user.work_time_preference:(allowedTimes.includes(changes.workTimePreference)?changes.workTimePreference:'any');
     const dndEnabled=changes.dndEnabled===undefined?Number(user.dnd_enabled):(changes.dndEnabled?1:0);
-    const validTime=value=>/^([01]\\d|2[0-3]):[0-5]\\d$/.test(String(value||''));
+    const validTime=value=>/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value||''));
     const dndStart=changes.dndStart===undefined?user.dnd_start:(validTime(changes.dndStart)?String(changes.dndStart):user.dnd_start);
     const dndEnd=changes.dndEnd===undefined?user.dnd_end:(validTime(changes.dndEnd)?String(changes.dndEnd):user.dnd_end);
     const newOrders=changes.newOrderNotifications===undefined?Number(user.notifications):(changes.newOrderNotifications?1:0);
