@@ -56,9 +56,11 @@ export function orderText(order,{manager=false,assigned=false,worker=null,distan
   const workerRate=contractorType==='ip'?ipRate:selfRate;
   const workerTotal=contractorType==='ip'?ipTotal:selfTotal;
   const distance=Number.isFinite(Number(distanceKm))?` · примерно ${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1}).format(Number(distanceKm))} км от вас`:'';
+  const targetName=[order.target_first_name,order.target_last_name].filter(Boolean).join(' ')||order.target_username||order.target_user_id;
   return [
     order.urgent?'<b>🔥 СРОЧНЫЙ ЗАКАЗ</b>':null,
     `<b>📦 Заказ №${order.id}: ${e(order.title)}</b>`,
+    manager&&order.target_user_id?`🎯 Персональный автозаказ для: ${e(targetName)}${order.target_username?` (@${e(order.target_username)})`:''}`:null,
     `📍 ${e(order.city)}`,
     order.address?`🏠 ${e(order.address)}${distance}`:null,
     `🕒 ${formatDate(order.starts_at)}`,
