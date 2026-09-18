@@ -14,7 +14,7 @@ const weightedIpRate=urgent=>randomFrom(urgent?[650,650,700,700,750,800]:[550,55
 export class OrderGenerator{
   constructor({db,app,addressProvider,logger=console}){
     this.db=db;this.app=app;this.addressProvider=addressProvider;this.log=logger;
-    this.enabled=process.env.BOT_AUTO_ORDERS==='1';
+    this.enabled=process.env.BOT_AUTO_ORDERS!=='0';
     this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
     this.ordersPerHour=Math.max(.1,Number(process.env.BOT_AUTO_ORDERS_PER_HOUR)||1.5);
     this.maxActive=Math.max(1,Number(process.env.BOT_AUTO_ORDER_MAX_ACTIVE)||3);
