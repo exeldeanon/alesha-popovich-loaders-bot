@@ -1,4 +1,4 @@
-import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderListKeyboard,orderText,shiftText,statsText,unverifiedWorkerMenu,verificationText,withdrawalText,workerCreatorMenu,workerLogsText,workerMenu,workerProfileText,workerSettingsText} from './views.mjs';
+import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderListKeyboard,orderText,shiftText,statsText,unverifiedWorkerMenu,userSettingsText,verificationText,withdrawalText,workerCreatorMenu,workerFunnelText,workerLogsText,workerMenu,workerProfileText,workerSettingsText} from './views.mjs';
 import {REGIONS,regionKeyByCity,regionLabel} from './regions.mjs';
 import {decimal,escapeHtml as e,inline,int,money,parseMoscowDate,removeKeyboard} from './utils.mjs';
 
@@ -46,6 +46,26 @@ export class BotApp{
   hasBotAccess(user){return user?.role==='worker'&&user?.status==='active';}
   isVerifiedWorker(user){return this.hasBotAccess(user)&&user?.verified===1&&Boolean(user?.region);}
   canCreateOrder(user){return this.isVerifiedWorker(user)&&user?.can_create_orders===1;}
+  moscowMinutes(date=new Date()){
+    const parts=new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Europe/Moscow'}).formatToParts(date);
+    const hour=Number(parts.find(item=>item.type==='hour')?.value||0),minute=Number(parts.find(item=>item.type==='minute')?.value||0);
+    return hour*60+minute;
+  }
+  timeToMinutes(value){const match=String(value||'').match(/^(\d{2}):(\d{2})$/);return match?Number(match[1])*60+Number(match[2]):0;}
+  isDndActive(user,date=new Date()){
+    if(user?.dnd_enabled!==1)return false;
+    const current=this.moscowMinutes(date),start=this.timeToMinutes(user.dnd_start),end=this.timeToMinutes(user.dnd_end);
+    if(start===end)return true;
+    return start<end?(current>=start&&current<end):(current>=start||current<end);
+  }
+  canPush(user,kind){
+    if(!user||user.maintenance_mode===1||this.isDndActive(user))return false;
+    if(kind==='new_order')return user.notifications===1;
+    if(kind==='rate')return user.rate_notifications===1;
+    if(kind==='nudge')return user.order_nudges===1;
+    if(kind==='shift_reminder')return user.shift_reminder_notifications===1;
+    return true;
+  }
   menuFor(user){return this.isManager(user)?managerMenu:(this.hasBotAccess(user)?(this.isVerifiedWorker(user)?(user?.can_create_orders===1?workerCreatorMenu:workerMenu):unverifiedWorkerMenu):removeKeyboard());}
   async menu(chatId,user,text='Выберите действие:'){return this.safeSend(chatId,text,{reply_markup:this.menuFor(user)});}
 
