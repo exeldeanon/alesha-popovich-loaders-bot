@@ -22,7 +22,7 @@ export function parseMoscowDate(value,nowDate=new Date()){
 }
 
 export const inline=rows=>({inline_keyboard:rows});
-export const reply=rows=>({keyboard:rows.map(row=>row.map(text=>({text}))),resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выберите действие'});
+export const reply=rows=>({keyboard:rows.map(row=>row.map(button=>typeof button==='string'?{text:button}:button)),resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выберите действие'});
 export const contactKeyboard=()=>({keyboard:[[{text:'📱 Отправить мой номер',request_contact:true}],['Отмена']],resize_keyboard:true,one_time_keyboard:true});
 export const removeKeyboard=()=>({remove_keyboard:true});
 
