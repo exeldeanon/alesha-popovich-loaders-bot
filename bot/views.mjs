@@ -2,22 +2,20 @@ import {escapeHtml as e,formatDate,fullName,hours,inline,money,reply,short} from
 
 export const workerMenu=reply([
   ['📦 Активные заказы','🗓 Мои смены'],
-  ['💰 Личный кабинет','📜 История смен'],
-  ['💸 Запросить выплату','🔔 Уведомления'],
+  ['💰 Личный кабинет','⚙️ Настройки'],
   ['🆘 Помощь'],
 ]);
 
 export const workerCreatorMenu=reply([
   ['📦 Активные заказы','🗓 Мои смены'],
   ['➕ Создать заказ'],
-  ['💰 Личный кабинет','📜 История смен'],
-  ['💸 Запросить выплату','🔔 Уведомления'],
+  ['💰 Личный кабинет','⚙️ Настройки'],
   ['🆘 Помощь'],
 ]);
 
 export const unverifiedWorkerMenu=reply([
   ['📦 Активные заказы'],
-  ['💰 Личный кабинет'],
+  ['💰 Личный кабинет','⚙️ Настройки'],
   ['🔑 Запросить верификацию'],
   ['🆘 Помощь'],
 ]);
@@ -82,15 +80,18 @@ const orderTotalForWorker=(order,worker)=>{
 
 const compactOrderAddress=value=>{
   const text=String(value||'Адрес не указан').trim();
-  return text.length>34?`${text.slice(0,33)}…`:text;
+  return text.length>22?`${text.slice(0,21)}…`:text;
 };
+
+const placesLeft=order=>Math.max(0,Number(order.people_needed||0)-Number(order.assigned_count||0)-Number(order.simulated_assigned||0));
+const placesWord=value=>{const n=Math.abs(Number(value)||0)%100,n1=n%10;return n>10&&n<20?'мест':n1===1?'место':n1>=2&&n1<=4?'места':'мест';};
 
 export function orderListKeyboard(orders,worker,{page=0,pageSize=5}={}){
   const totalPages=Math.max(1,Math.ceil(orders.length/pageSize));
   const safePage=Math.min(totalPages-1,Math.max(0,Number(page)||0));
   const start=safePage*pageSize;
   const rows=orders.slice(start,start+pageSize).map(order=>[{
-    text:`${order.urgent?'🔥 ':''}${compactOrderAddress(order.address)} · ${money(orderTotalForWorker(order,worker))}`,
+    text:`${order.urgent?'🔥 ':''}${compactOrderAddress(order.address)} · ${money(orderTotalForWorker(order,worker))} · осталось ${placesLeft(order)} ${placesWord(placesLeft(order))}`,
     callback_data:`order_view:${order.id}:${safePage}`,
   }]);
   if(totalPages>1)rows.push([
@@ -128,6 +129,32 @@ export function workerProfileText(user){return [
   `📍 Регион: ${e(user.region||'не назначен')}`,
   `💼 Статус: ${verificationStatus(user)}`,
 ].filter(Boolean).join('\n');}
+
+const preferenceLabel=value=>({any:'Любое время',morning:'Утро',day:'День',evening:'Вечер'})[value]||'Любое время';
+
+export function userSettingsText(user){return [
+  '<b>⚙️ Настройки</b>',
+  'Здесь можно гибко настроить ленту и уведомления под себя.',
+  '',
+  `🕒 Предпочтительное время: <b>${preferenceLabel(user.work_time_preference)}</b> <i>(утро 06–12, день 12–18, вечер 18–24)</i>`,
+  `🌙 Не беспокоить: <b>${user.dnd_enabled===1?`${e(user.dnd_start)}–${e(user.dnd_end)} по Москве`:'выключено'}</b>`,
+  '',
+  `🔔 Новые заказы: <b>${user.notifications===1?'включены':'выключены'}</b>`,
+  `📈 Рост ставки: <b>${user.rate_notifications===1?'включён':'выключен'}</b>`,
+  `💪 Подгонялки: <b>${user.order_nudges===1?'включены':'выключены'}</b>`,
+  `⏰ Напоминания о сменах: <b>${user.shift_reminder_notifications===1?'включены':'выключены'}</b>`,
+].join('\n');}
+
+export function workerFunnelText(user,funnel){
+  const pct=(a,b)=>b?Math.round(a/b*100):0;
+  return [
+    `<b>📊 Воронка: ${e(fullName(user))}</b>`,
+    `👀 Увидел заказов: <b>${funnel.seen}</b>`,
+    `📖 Открыл: <b>${funnel.opened}</b> · ${pct(funnel.opened,funnel.seen)}% от увиденных`,
+    `✋ Откликнулся: <b>${funnel.applied}</b> · ${pct(funnel.applied,funnel.opened)}% от открытых`,
+    `✅ Выполнил смен: <b>${funnel.completed}</b> · ${pct(funnel.completed,funnel.applied)}% от откликов`,
+  ].join('\n');
+}
 
 export function workerSettingsText(user){return [
   `<b>⚙️ Настройки грузчика: ${e(fullName(user))}</b>`,
