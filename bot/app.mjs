@@ -1,4 +1,4 @@
-import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderListKeyboard,orderText,shiftText,statsText,unverifiedWorkerMenu,verificationText,withdrawalText,workerCreatorMenu,workerLogsText,workerMenu,workerProfileText,workerSettingsText} from './views.mjs';
+import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderListKeyboard,orderText,shiftText,statsText,unverifiedWorkerMenu,userSettingsText,verificationText,withdrawalText,workerCreatorMenu,workerFunnelText,workerLogsText,workerMenu,workerProfileText,workerSettingsText} from './views.mjs';
 import {REGIONS,regionKeyByCity,regionLabel} from './regions.mjs';
 import {decimal,escapeHtml as e,inline,int,money,parseMoscowDate,removeKeyboard} from './utils.mjs';
 
@@ -16,8 +16,10 @@ export class BotApp{
   async safeSend(chatId,text,options={}){try{return await this.tg.sendMessage(chatId,text,options);}catch(error){this.log.error?.(`Не удалось отправить сообщение ${chatId}:`,error.message);return null;}}
   async notifyManagers(text,options={}){for(const manager of this.db.listManagers())await this.safeSend(manager.telegram_id,text,options);}
   async broadcastWorkers(text,options={}){for(const worker of this.db.listActiveWorkers())await this.safeSend(worker.telegram_id,text,options);}
-  async sendOrderToWorker(worker,order,{save=false}={}){
+  async sendOrderToWorker(worker,order,{save=false,notification=true}={}){
+    if(notification&&!this.canPush(worker,'new_order'))return null;
     const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});
+    if(sent)this.db.recordWorkerOrderEvent(worker.telegram_id,order.id,'seen');
     if(save&&sent?.message_id)this.db.saveOrderMessage(order.id,worker.telegram_id,sent.message_id);
     return sent;
   }
@@ -28,7 +30,7 @@ export class BotApp{
   async publishGeneratedOrder(order){
     if(order.target_user_id){
       const worker=this.db.getUser(order.target_user_id);
-      if(worker&&worker.status==='active'&&worker.verified===1&&worker.notifications===1&&worker.maintenance_mode!==1)return this.sendOrderToWorker(worker,order,{save:true});
+      if(worker&&worker.status==='active'&&worker.verified===1)return this.sendOrderToWorker(worker,order,{save:true,notification:true});
       return null;
     }
     return this.broadcastRegionOrder(order,{save:true});
@@ -46,6 +48,26 @@ export class BotApp{
   hasBotAccess(user){return user?.role==='worker'&&user?.status==='active';}
   isVerifiedWorker(user){return this.hasBotAccess(user)&&user?.verified===1&&Boolean(user?.region);}
   canCreateOrder(user){return this.isVerifiedWorker(user)&&user?.can_create_orders===1;}
+  moscowMinutes(date=new Date()){
+    const parts=new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Europe/Moscow'}).formatToParts(date);
+    const hour=Number(parts.find(item=>item.type==='hour')?.value||0),minute=Number(parts.find(item=>item.type==='minute')?.value||0);
+    return hour*60+minute;
+  }
+  timeToMinutes(value){const match=String(value||'').match(/^(\d{2}):(\d{2})$/);return match?Number(match[1])*60+Number(match[2]):0;}
+  isDndActive(user,date=new Date()){
+    if(user?.dnd_enabled!==1)return false;
+    const current=this.moscowMinutes(date),start=this.timeToMinutes(user.dnd_start),end=this.timeToMinutes(user.dnd_end);
+    if(start===end)return true;
+    return start<end?(current>=start&&current<end):(current>=start||current<end);
+  }
+  canPush(user,kind){
+    if(!user||user.maintenance_mode===1||this.isDndActive(user))return false;
+    if(kind==='new_order')return user.notifications===1;
+    if(kind==='rate')return user.rate_notifications===1;
+    if(kind==='nudge')return user.order_nudges===1;
+    if(kind==='shift_reminder')return user.shift_reminder_notifications===1;
+    return true;
+  }
   menuFor(user){return this.isManager(user)?managerMenu:(this.hasBotAccess(user)?(this.isVerifiedWorker(user)?(user?.can_create_orders===1?workerCreatorMenu:workerMenu):unverifiedWorkerMenu):removeKeyboard());}
   async menu(chatId,user,text='Выберите действие:'){return this.safeSend(chatId,text,{reply_markup:this.menuFor(user)});}
 
@@ -64,7 +86,13 @@ export class BotApp{
     const chatId=message.chat.id;
     const text=String(message.text||'').trim();
     if(this.isWorker(user)){
-      this.db.logWorkerAction(user.telegram_id,message.location?'location':'message',{text:message.location?'Отправил геопозицию':(text||'[без текста]')});
+      const action=message.location?'location':message.contact?'contact':message.photo?'photo':message.document?'document':message.voice?'voice':message.video?'video':message.sticker?'sticker':text.startsWith('/')?'command':'message';
+      this.db.logWorkerAction(user.telegram_id,action,{
+        text:text||undefined,
+        messageId:message.message_id,
+        contact:Boolean(message.contact),
+        location:Boolean(message.location),
+      });
       if(user.maintenance_mode===1)return this.safeSend(chatId,'🛠 <b>Сейчас идут технические работы.</b>\nБот временно недоступен. Попробуйте позже.',{reply_markup:this.menuFor(user)});
     }
     if(message.location&&this.isWorker(user))return this.menu(chatId,user,'Геопозиция больше не требуется. Откройте активный заказ и нажмите «🗺 Посмотреть на карте».');
@@ -82,16 +110,24 @@ export class BotApp{
   async start(chatId,user){
     this.db.clearSession(user.telegram_id);
     if(this.isManager(user))return this.menu(chatId,user,'<b>Панель менеджера «Алёша Попович»</b>');
-    if(this.isVerifiedWorker(user))return this.menu(chatId,user,`С возвращением, ${e(user.first_name||'коллега')}!`);
-    if(this.hasBotAccess(user))return this.menu(chatId,user,[
-      `С возвращением, ${e(user.first_name||'коллега')}!`,
-      'Статус: <b>Не верифицирован</b>.',
-      'Заказы доступны для просмотра. Чтобы откликаться и брать их, запросите верификацию у менеджера.',
+    if(this.isVerifiedWorker(user))return this.menu(chatId,user,[
+      `<b>👋 Добро пожаловать, ${e(user.first_name||'коллега')}!</b>`,
+      'Здесь можно быстро смотреть активные заказы, откликаться и контролировать выплаты.',
+      '',
+      '⚙️ В разделе <b>«Настройки»</b> всё гибко настраивается под вас: время работы, режим «Не беспокоить» и каждый тип уведомлений отдельно.',
     ].join('\n'));
-    if(user.status==='pending')return this.safeSend(chatId,'<b>Заявка на доступ к боту уже у менеджера.</b>\nОжидайте решения.',{reply_markup:removeKeyboard()});
+    if(this.hasBotAccess(user))return this.menu(chatId,user,[
+      `<b>👋 Добро пожаловать, ${e(user.first_name||'коллега')}!</b>`,
+      'Статус: <b>Не верифицирован</b>.',
+      'Заказы уже доступны для просмотра. Чтобы откликаться и брать их, запросите верификацию у менеджера.',
+      '',
+      '⚙️ В «Настройках» можно заранее настроить уведомления и режим «Не беспокоить».',
+    ].join('\n'));
+    if(user.status==='pending')return this.safeSend(chatId,'<b>👋 Добро пожаловать!</b>\nЗаявка на доступ к боту уже у менеджера. Ожидайте решения.',{reply_markup:removeKeyboard()});
     return this.safeSend(chatId,[
-      '<b>Работа грузчиком в «Алёша Попович»</b>',
-      'Для начала нужно получить доступ к боту у менеджера.',
+      '<b>👋 Добро пожаловать в «Алёша Попович»!</b>',
+      'Здесь грузчики находят заказы, смотрят адрес и оплату, откликаются и получают выплаты.',
+      'После выдачи доступа появятся гибкие настройки уведомлений и рабочего времени.',
       '',`Ваш Telegram ID: <code>${e(user.telegram_id)}</code>`,
     ].join('\n'),{reply_markup:inline([[{text:'🔑 Запросить доступ',callback_data:'access_start'}]])});
   }
@@ -99,7 +135,7 @@ export class BotApp{
   async help(chatId,user){
     const text=this.isManager(user)
       ?'<b>Помощь менеджеру</b>\nСоздавайте заказы, рассматривайте отклики и заявки на доступ, подтверждайте смены и выплаты. Любой ввод можно остановить командой /cancel.'
-      :'<b>Как пользоваться ботом</b>\n1. Откройте активные заказы и откликнитесь.\n2. После одобрения адрес появится в «Моих сменах».\n3. В день работы нажмите «Начать», после работы — «Завершить».\n4. Подтверждённая сумма попадёт в личный кабинет.\n\nПо организационным вопросам: @AleshaPopovichManager';
+      :'<b>Как пользоваться ботом</b>\n1. Откройте активные заказы и выберите подходящий.\n2. После назначения смена появится в «Моих сменах».\n3. В день работы нажмите «Начать», после работы — «Завершить».\n4. История смен и вывод денег находятся в «Личном кабинете».\n5. В «Настройках» можно выбрать удобное время работы, режим «Не беспокоить» и отдельно включать/выключать уведомления.\n\nПо организационным вопросам: @AleshaPopovichManager';
     return this.safeSend(chatId,text,{reply_markup:this.menuFor(user)});
   }
 
@@ -117,14 +153,61 @@ export class BotApp{
       if(!this.hasBotAccess(user))return this.start(chatId,user);
       if(text==='🔑 Запросить верификацию')return this.requestVerification(chatId,user);
       if(text==='➕ Создать заказ'){if(!this.canCreateOrder(user))return this.menu(chatId,user,'⛔ Создание заказов для вашего аккаунта отключено менеджером.');return this.beginOrder(chatId,user);}
-      if(text==='💰 Личный кабинет'){const geo=this.db.getRegionGeo(user.region);return this.safeSend(chatId,cabinetText({...user,region:geo?.label||regionLabel(user.region)},this.db.getCabinet(user.telegram_id)),{reply_markup:this.menuFor(user)});}
+      if(text==='💰 Личный кабинет')return this.showCabinet(chatId,user);
+      if(text==='⚙️ Настройки')return this.showUserSettings(chatId,user);
       if(text==='📦 Активные заказы')return this.showOrders(chatId,user);
       if(text==='🗓 Мои смены'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Смены доступны после верификации у менеджера.');return this.showShifts(chatId,user,false);}
       if(text==='📜 История смен'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ История смен доступна после верификации у менеджера.');return this.showShifts(chatId,user,true);}
       if(text==='💸 Запросить выплату'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Выплаты доступны после верификации у менеджера.');return this.beginWithdrawal(chatId,user);}
-      if(text==='🔔 Уведомления'){if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Уведомления о заказах доступны после верификации.');const changed=this.db.toggleNotifications(user.telegram_id);return this.menu(chatId,changed,`Уведомления о новых заказах ${changed.notifications?'включены':'выключены'}.`);}
+      if(text==='🔔 Уведомления')return this.showUserSettings(chatId,user);
     }
     return this.menu(chatId,user,'Не понял команду. Выберите действие кнопкой.');
+  }
+
+  async showCabinet(chatId,user){
+    const geo=this.db.getRegionGeo(user.region);
+    const cabinet=this.db.getCabinet(user.telegram_id);
+    const rows=this.isVerifiedWorker(user)?[[
+      {text:'💸 Вывести деньги',callback_data:'cabinet_withdraw'},
+      {text:'📜 История смен',callback_data:'cabinet_history'},
+    ]]:[];
+    return this.safeSend(chatId,cabinetText({...user,region:geo?.label||regionLabel(user.region)},cabinet),{reply_markup:rows.length?inline(rows):this.menuFor(user)});
+  }
+
+  async showUserSettings(chatId,user,{messageId=null,notice=''}={}){
+    const fresh=this.db.getUser(user.telegram_id)||user;
+    const pref=fresh.work_time_preference||'any';
+    const rows=[
+      [
+        {text:`${pref==='any'?'✅ ':''}Любое`,callback_data:'user_pref:any'},
+        {text:`${pref==='morning'?'✅ ':''}Утро`,callback_data:'user_pref:morning'},
+        {text:`${pref==='day'?'✅ ':''}День`,callback_data:'user_pref:day'},
+        {text:`${pref==='evening'?'✅ ':''}Вечер`,callback_data:'user_pref:evening'},
+      ],
+      [
+        {text:`🌙 Не беспокоить: ${fresh.dnd_enabled===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_dnd_toggle'},
+        {text:`🕘 ${fresh.dnd_start}–${fresh.dnd_end}`,callback_data:'user_dnd_time'},
+      ],
+      [
+        {text:`🔔 Новые заказы: ${fresh.notifications===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:new_order'},
+        {text:`📈 Рост ставки: ${fresh.rate_notifications===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:rate'},
+      ],
+      [
+        {text:`💪 Подгонялки: ${fresh.order_nudges===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:nudge'},
+        {text:`⏰ Смены: ${fresh.shift_reminder_notifications===1?'ВКЛ':'ВЫКЛ'}`,callback_data:'user_notify:shift'},
+      ],
+      [
+        {text:'🔕 Отключить все уведомления',callback_data:'user_notify_all:off'},
+        {text:'🔔 Включить все',callback_data:'user_notify_all:on'},
+      ],
+    ];
+    const text=`${notice?e(notice)+'\n\n':''}${userSettingsText(fresh)}`;
+    const options={reply_markup:inline(rows)};
+    if(messageId){
+      try{return await this.tg.editMessage(chatId,messageId,text,options);}
+      catch(error){this.log.warn?.('Не удалось обновить настройки:',error.message);}
+    }
+    return this.safeSend(chatId,text,options);
   }
 
   async beginAccess(chatId,user){
@@ -165,6 +248,7 @@ export class BotApp{
     if(session.flow==='access')return this.accessSession(message,user,session,text);
     if(session.flow==='order'&&(this.isManager(user)||this.canCreateOrder(user)))return this.orderSession(message,user,session,text);
     if(session.flow==='worker_setting'&&this.isManager(user))return this.workerSettingSession(message,user,session,text);
+    if(session.flow==='user_settings'&&this.isWorker(user))return this.userSettingsSession(message,user,session,text);
     if(session.flow==='withdrawal'&&this.isWorker(user))return this.withdrawalSession(message,user,text);
     if(session.flow==='shift_edit'&&this.isManager(user))return this.shiftEditSession(message,user,session,text);
     if(session.flow==='worker_region'&&this.isManager(user))return this.workerRegionSession(message,user,session,text);
@@ -222,6 +306,20 @@ export class BotApp{
     this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Настройка отменена.');
   }
 
+  async userSettingsSession(message,user,session,text){
+    const chatId=message.chat.id;
+    if(session.step==='dnd_time'){
+      const match=text.match(/^([01]\d|2[0-3]):([0-5]\d)\s*[-–—]\s*([01]\d|2[0-3]):([0-5]\d)$/);
+      if(!match)return this.safeSend(chatId,'Введите интервал в формате <b>23:00-08:00</b>.');
+      const start=`${match[1]}:${match[2]}`,end=`${match[3]}:${match[4]}`;
+      const updated=this.db.updateUserPreferences(user.telegram_id,{dndStart:start,dndEnd:end,dndEnabled:true});
+      this.db.clearSession(user.telegram_id);
+      return this.showUserSettings(chatId,updated,{notice:`Режим «Не беспокоить» установлен: ${start}–${end}.`});
+    }
+    this.db.clearSession(user.telegram_id);
+    return this.showUserSettings(chatId,user,{notice:'Настройка отменена.'});
+  }
+
   async withdrawalSession(message,user,text){
     const amount=int(text,{min:1,max:10_000_000});if(amount==null)return this.safeSend(message.chat.id,'Введите сумму целым числом.');
     return this.createWithdrawal(message.chat.id,user,amount);
@@ -266,9 +364,22 @@ export class BotApp{
   }
 
   workerOrders(user){
-    return this.isVerifiedWorker(user)
+    const orders=this.isVerifiedWorker(user)
       ?this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city,userId:user.telegram_id,limit:100})
       :this.db.listActiveOrders({userId:user.telegram_id,limit:100});
+    const preference=user.work_time_preference||'any';
+    if(preference==='any')return orders;
+    const bucket=order=>{
+      const hour=Number(new Intl.DateTimeFormat('en-GB',{hour:'2-digit',hourCycle:'h23',timeZone:'Europe/Moscow'}).format(new Date(order.starts_at)));
+      if(hour>=6&&hour<12)return 'morning';
+      if(hour>=12&&hour<18)return 'day';
+      if(hour>=18)return 'evening';
+      return 'night';
+    };
+    return [...orders].sort((a,b)=>{
+      const am=bucket(a)===preference?0:1,bm=bucket(b)===preference?0:1;
+      return am-bm||new Date(a.starts_at)-new Date(b.starts_at);
+    });
   }
 
   async showOrders(chatId,user,{page=0,messageId=null}={}){
@@ -282,9 +393,11 @@ export class BotApp{
     const safePage=Math.min(totalPages-1,Math.max(0,Number(page)||0));
     const text=[
       `<b>📦 Активные заказы: ${orders.length}</b>`,
-      'Выберите заказ. В каждой кнопке: адрес и ориентир выплаты.',
+      'Выберите заказ. В каждой кнопке: адрес, ориентир выплаты и сколько мест осталось.',
       '🔥 — срочный заказ.',
     ].join('\n');
+    const visible=orders.slice(safePage*5,safePage*5+5);
+    for(const order of visible)this.db.recordWorkerOrderEvent(user.telegram_id,order.id,'seen');
     const options={reply_markup:orderListKeyboard(orders,user,{page:safePage,pageSize:5})};
     if(messageId){
       try{return await this.tg.editMessage(chatId,messageId,text,options);}
@@ -297,6 +410,7 @@ export class BotApp{
     const orders=this.workerOrders(user);
     const order=orders.find(item=>Number(item.id)===Number(orderId));
     if(!order)return this.showOrders(chatId,user,{page,messageId});
+    this.db.recordWorkerOrderEvent(user.telegram_id,order.id,'opened');
     const apps=this.isVerifiedWorker(user)?new Map(this.db.listUserApplications(user.telegram_id,100).map(item=>[item.order_id,item])):new Map();
     const app=apps.get(order.id);
     const options={reply_markup:orderKeyboard(order,{
@@ -326,7 +440,10 @@ export class BotApp{
           {text:worker.verified===1&&worker.contractor_type==='self_employed'?'✅ Самозанятый':'Самозанятый',callback_data:`worker_status:${worker.telegram_id}:self_employed`},
         ],
         [{text:'📍 Изменить регион / город',callback_data:`worker_region_custom:${worker.telegram_id}`}],
-        [{text:'⚙️ Персональные настройки',callback_data:`worker_settings:${worker.telegram_id}`}],
+        [
+          {text:'⚙️ Персональные настройки',callback_data:`worker_settings:${worker.telegram_id}`},
+          {text:'📊 Воронка',callback_data:`worker_funnel:${worker.telegram_id}`},
+        ],
       ];
       await this.safeSend(chatId,workerProfileText({...worker,region:label}),{reply_markup:inline(rows)});
     }
@@ -348,6 +465,15 @@ export class BotApp{
     return this.safeSend(chatId,`${notice?e(notice)+'\n\n':''}${workerSettingsText(worker)}`,{reply_markup:inline(rows)});
   }
 
+  async showWorkerFunnel(chatId,workerId){
+    const worker=this.db.getUser(workerId);if(!worker)return this.safeSend(chatId,'Грузчик не найден.',{reply_markup:managerMenu});
+    const funnel=this.db.getWorkerFunnel(workerId);
+    return this.safeSend(chatId,workerFunnelText(worker,funnel),{reply_markup:inline([
+      [{text:'📋 Логи действий',callback_data:`worker_logs:${worker.telegram_id}`}],
+      [{text:'⚙️ К настройкам',callback_data:`worker_settings:${worker.telegram_id}`}],
+    ])});
+  }
+
   async showWorkerLogs(chatId,workerId){
     const worker=this.db.getUser(workerId);if(!worker)return this.safeSend(chatId,'Грузчик не найден.',{reply_markup:managerMenu});
     return this.safeSend(chatId,workerLogsText(worker,this.db.listWorkerActionLogs(workerId,25)),{reply_markup:inline([[{text:'⚙️ К настройкам',callback_data:`worker_settings:${worker.telegram_id}`}]])});
@@ -366,6 +492,26 @@ export class BotApp{
 
   async createWithdrawal(chatId,user,amount){const result=this.db.createWithdrawal(user.telegram_id,amount);if(result.error)return this.safeSend(chatId,`Недоступная сумма. Сейчас можно вывести ${money(result.cabinet.available)}.`);this.db.clearSession(user.telegram_id);await this.notifyManagers(withdrawalText(result.withdrawal),{reply_markup:decisionKeyboard('withdrawal_decide',result.withdrawal.id,'Выплачено')});return this.menu(chatId,user,`Заявка на ${money(amount)} отправлена менеджеру.`);}
 
+  async notifyRateIncrease(previousOrder,updatedOrder){
+    if(!updatedOrder?.urgent||!updatedOrder?.target_user_id)return null;
+    const worker=this.db.getUser(updatedOrder.target_user_id);
+    if(!worker||!this.canPush(worker,'rate'))return null;
+    const duration=Number(updatedOrder.duration_hours||0);
+    const oldRate=worker.contractor_type==='ip'?Math.max(550,Number(previousOrder.ip_rate)||550):(Number(previousOrder.self_employed_rate)||450);
+    const newRate=worker.contractor_type==='ip'?Math.max(550,Number(updatedOrder.ip_rate)||550):(Number(updatedOrder.self_employed_rate)||450);
+    const oldTotal=Math.round(oldRate*duration),newTotal=Math.round(newRate*duration);
+    if(newTotal<=oldTotal)return null;
+    return this.safeSend(worker.telegram_id,[
+      '<b>🔥 Ставка выросла!</b>',
+      `Заказ №${updatedOrder.id}: ${e(updatedOrder.title)}`,
+      `🏠 ${e(updatedOrder.address)}`,
+      `Было: <s>${money(oldTotal)}</s> → стало: <b>${money(newTotal)}</b>`,
+    ].join('\n'),{reply_markup:inline([
+      [{text:'📦 Открыть заказ',callback_data:`order_view:${updatedOrder.id}:0`}],
+      [{text:'⚙️ Настройки уведомлений',callback_data:'user_settings_open'}],
+    ])});
+  }
+
   async sendOrderNudges(intervalMinutes=45){
     const intervalMs=Math.max(10,Number(intervalMinutes)||45)*60_000;
     const messages=[
@@ -375,7 +521,7 @@ export class BotApp{
       count=>`Эй, работа сама себя не возьмёт 😄 Сейчас <b>${count}</b> заказов. Погнали смотреть.`,
     ];
     for(const worker of this.db.listAutoOrderWorkers()){
-      if(worker.order_nudges!==1||worker.maintenance_mode===1)continue;
+      if(!this.canPush(worker,'nudge'))continue;
       const last=worker.last_order_nudge_at?new Date(worker.last_order_nudge_at).getTime():0;
       if(last&&Date.now()-last<intervalMs)continue;
       const orders=this.workerOrders(worker);
@@ -398,6 +544,39 @@ export class BotApp{
     }
     if(data==='cancel'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(data==='access_start')return this.beginAccess(chatId,user);
+    if(data==='user_settings_open'&&this.isWorker(user))return this.showUserSettings(chatId,user);
+    if(data==='cabinet_withdraw'&&this.isWorker(user)){
+      if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ Выплаты доступны после верификации у менеджера.');
+      return this.beginWithdrawal(chatId,user);
+    }
+    if(data==='cabinet_history'&&this.isWorker(user)){
+      if(!this.isVerifiedWorker(user))return this.menu(chatId,user,'⛔ История смен доступна после верификации у менеджера.');
+      return this.showShifts(chatId,user,true);
+    }
+    let match=data.match(/^user_pref:(any|morning|day|evening)$/);if(match&&this.isWorker(user)){
+      const updated=this.db.updateUserPreferences(user.telegram_id,{workTimePreference:match[1]});
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
+    if(data==='user_dnd_toggle'&&this.isWorker(user)){
+      const updated=this.db.updateUserPreferences(user.telegram_id,{dndEnabled:user.dnd_enabled!==1});
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
+    if(data==='user_dnd_time'&&this.isWorker(user)){
+      this.db.setSession(user.telegram_id,'user_settings','dnd_time',{});
+      return this.safeSend(chatId,'Введите время режима «Не беспокоить» в формате <b>23:00-08:00</b>.',{reply_markup:this.menuFor(user)});
+    }
+    match=data.match(/^user_notify:(new_order|rate|nudge|shift)$/);if(match&&this.isWorker(user)){
+      const changes=match[1]==='new_order'?{newOrderNotifications:user.notifications!==1}
+        :match[1]==='rate'?{rateNotifications:user.rate_notifications!==1}
+        :match[1]==='nudge'?{orderNudges:user.order_nudges!==1}
+        :{shiftReminderNotifications:user.shift_reminder_notifications!==1};
+      const updated=this.db.updateUserPreferences(user.telegram_id,changes);
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
+    match=data.match(/^user_notify_all:(on|off)$/);if(match&&this.isWorker(user)){
+      const updated=this.db.setAllNotifications(user.telegram_id,match[1]==='on');
+      return this.showUserSettings(chatId,updated,{messageId:query.message?.message_id||null});
+    }
     if(data==='order_nudges_off'&&this.isWorker(user)){
       const updated=this.db.setOrderNudges(user.telegram_id,false);
       const text='🔕 Подгоняющую рассылку отключил. Уведомления о новых заказах остаются как были.';
@@ -413,7 +592,7 @@ export class BotApp{
       return this.safeSend(chatId,text,options);
     }
     if(data==='orders_noop')return;
-    let match=data.match(/^orders_page:(\d+)$/);if(match&&this.isWorker(user)){
+    match=data.match(/^orders_page:(\d+)$/);if(match&&this.isWorker(user)){
       return this.showOrders(chatId,user,{page:Number(match[1]),messageId:query.message?.message_id||null});
     }
     match=data.match(/^order_view:(\d+):(\d+)$/);if(match&&this.isWorker(user)){
@@ -451,6 +630,7 @@ export class BotApp{
       return this.safeSend(chatId,`Тип занятости: <b>${match[2]==='ip'?'ИП':'Самозанятый'}</b>.\nТеперь введите регион или город, который нужно назначить грузчику. Например: «Самара», «Краснодарский край», «Республика Татарстан».`,{reply_markup:removeKeyboard()});
     }
     match=data.match(/^worker_settings:(\d+)$/);if(match&&this.isManager(user))return this.showWorkerSettings(chatId,match[1]);
+    match=data.match(/^worker_funnel:(\d+)$/);if(match&&this.isManager(user))return this.showWorkerFunnel(chatId,match[1]);
     match=data.match(/^worker_setting_input:(\d+):(frequency|urgent)$/);if(match&&this.isManager(user)){
       const worker=this.db.getUser(match[1]);if(!worker)return this.safeSend(chatId,'Грузчик не найден.');
       this.db.setSession(user.telegram_id,'worker_setting',match[2],{workerId:worker.telegram_id});
@@ -506,5 +686,13 @@ export class BotApp{
     return this.safeSend(chatId,'Кнопка устарела. Откройте нужный раздел ещё раз.');
   }
 
-  async sendReminders(minutes=120){const before=new Date(Date.now()+minutes*60_000).toISOString();for(const item of this.db.remindersDue(before)){const sent=await this.safeSend(item.user_id,`<b>Смена скоро начнётся</b>\n${e(item.title)} · ${e(item.city)}\nАдрес: ${e(item.address)}\nВремя: ${new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short',timeZone:'Europe/Moscow'}).format(new Date(item.starts_at))}`);if(sent)this.db.markNotification('shift_reminder',item.id,item.user_id);}}
+  async sendReminders(minutes=120){
+    const before=new Date(Date.now()+minutes*60_000).toISOString();
+    for(const item of this.db.remindersDue(before)){
+      const worker=this.db.getUser(item.user_id);
+      if(!this.canPush(worker,'shift_reminder'))continue;
+      const sent=await this.safeSend(item.user_id,`<b>Смена скоро начнётся</b>\n${e(item.title)} · ${e(item.city)}\nАдрес: ${e(item.address)}\nВремя: ${new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short',timeZone:'Europe/Moscow'}).format(new Date(item.starts_at))}`);
+      if(sent)this.db.markNotification('shift_reminder',item.id,item.user_id);
+    }
+  }
 }
