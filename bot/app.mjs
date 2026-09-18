@@ -7,7 +7,10 @@ const decisionKeyboard=(kind,id,yes='Одобрить',no='Отклонить')=
 ]]);
 
 export class BotApp{
-  constructor({db,telegram,logger=console}){this.db=db;this.tg=telegram;this.log=logger;}
+  constructor({db,telegram,logger=console,adminUsernames=[]}){
+    this.db=db;this.tg=telegram;this.log=logger;
+    this.adminUsernames=new Set(adminUsernames.map(value=>String(value).replace(/^@/,'').toLowerCase()).filter(Boolean));
+  }
 
   async safeSend(chatId,text,options={}){try{return await this.tg.sendMessage(chatId,text,options);}catch(error){this.log.error?.(`Не удалось отправить сообщение ${chatId}:`,error.message);return null;}}
   async notifyManagers(text,options={}){for(const manager of this.db.listManagers())await this.safeSend(manager.telegram_id,text,options);}
@@ -25,7 +28,11 @@ export class BotApp{
 
   async handleMessage(message){
     if(message.chat?.type&&message.chat.type!=='private')return;
-    const user=this.db.upsertUser(message.from);
+    let user=this.db.upsertUser(message.from);
+    if(message.from?.username&&this.adminUsernames.has(message.from.username.toLowerCase())){
+      this.db.ensureManager(user.telegram_id);
+      user=this.db.getUser(user.telegram_id);
+    }
     const chatId=message.chat.id;
     const text=String(message.text||'').trim();
     if(text==='/cancel'||text==='Отмена'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}

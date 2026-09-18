@@ -19,10 +19,11 @@ loadEnv();
 const token=process.env.TELEGRAM_BOT_TOKEN;
 if(!token)throw new Error('Укажите TELEGRAM_BOT_TOKEN в .env или переменных окружения.');
 const adminIds=String(process.env.BOT_ADMIN_IDS||'').split(',').map(value=>value.trim()).filter(Boolean);
+const adminUsernames=String(process.env.BOT_ADMIN_USERNAMES||'AleshaPopovichManager').split(',').map(value=>value.trim()).filter(Boolean);
 const db=new BotDatabase(process.env.BOT_DB_PATH||'data/bot.sqlite');
 for(const id of adminIds)db.ensureManager(id);
 const telegram=new TelegramClient(token);
-const app=new BotApp({db,telegram});
+const app=new BotApp({db,telegram,adminUsernames});
 const controller=new AbortController();
 const reminderMinutes=Number(process.env.BOT_REMINDER_MINUTES)||120;
 
@@ -37,8 +38,8 @@ try{
   console.warn('Telegram временно недоступен при настройке команд. Бот продолжит подключение:',error.message);
 }
 
-if(!adminIds.length)console.warn('BOT_ADMIN_IDS пуст. После /start бот покажет Telegram ID; добавьте его в .env и перезапустите бот.');
-console.log(`Бот запущен. Менеджеров: ${adminIds.length}. База: ${db.filename}`);
+if(!adminIds.length)console.log(`Менеджер будет назначен по Telegram username: ${adminUsernames.map(value=>`@${value.replace(/^@/,'')}`).join(', ')}`);
+console.log(`Бот запущен. Менеджеров по ID: ${adminIds.length}. База: ${db.filename}`);
 
 const reminders=setInterval(()=>app.sendReminders(reminderMinutes).catch(error=>console.error('Ошибка напоминаний:',error)),5*60_000);
 reminders.unref();
