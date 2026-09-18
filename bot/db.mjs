@@ -286,7 +286,7 @@ export class BotDatabase {
   getWorkerFunnel(userId){
     const id=String(userId);
     const eventCount=event=>num(this.db.prepare("SELECT COUNT(*) count FROM worker_order_events WHERE user_id=? AND event=?").get(id,event).count);
-    const completed=num(this.db.prepare("SELECT COUNT(*) count FROM shifts WHERE user_id=? AND status='completed'").get(id).count);
+    const completed=num(this.db.prepare("SELECT COUNT(*) count FROM shifts s JOIN worker_order_events e ON e.user_id=s.user_id AND e.order_id=s.order_id AND e.event='applied' WHERE s.user_id=? AND s.status='completed'").get(id).count);
     return {seen:eventCount('seen'),opened:eventCount('opened'),applied:eventCount('applied'),completed};
   }
   updateWorkerSettings(userId,changes={}){
