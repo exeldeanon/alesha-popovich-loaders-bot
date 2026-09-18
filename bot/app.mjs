@@ -1,4 +1,5 @@
-import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderText,shiftText,statsText,withdrawalText,workerMenu} from './views.mjs';
+import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderText,shiftText,statsText,withdrawalText,workerMenu,workerProfileText} from './views.mjs';
+import {REGIONS,regionKeyByCity,regionLabel} from './regions.mjs';
 import {contactKeyboard,decimal,escapeHtml as e,inline,int,money,parseMoscowDate,removeKeyboard} from './utils.mjs';
 
 const decisionKeyboard=(kind,id,yes='Одобрить',no='Отклонить')=>inline([[
@@ -15,6 +16,23 @@ export class BotApp{
   async safeSend(chatId,text,options={}){try{return await this.tg.sendMessage(chatId,text,options);}catch(error){this.log.error?.(`Не удалось отправить сообщение ${chatId}:`,error.message);return null;}}
   async notifyManagers(text,options={}){for(const manager of this.db.listManagers())await this.safeSend(manager.telegram_id,text,options);}
   async broadcastWorkers(text,options={}){for(const worker of this.db.listActiveWorkers())await this.safeSend(worker.telegram_id,text,options);}
+  async sendOrderToWorker(worker,order,{save=false}={}){
+    const sent=await this.safeSend(worker.telegram_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});
+    if(save&&sent?.message_id)this.db.saveOrderMessage(order.id,worker.telegram_id,sent.message_id);
+    return sent;
+  }
+  async broadcastRegionOrder(order,{save=false}={}){
+    const workers=order.region?this.db.listActiveWorkersByRegion(order.region):this.db.listActiveWorkers();
+    for(const worker of workers)await this.sendOrderToWorker(worker,order,{save});
+  }
+  async publishGeneratedOrder(order){return this.broadcastRegionOrder(order,{save:true});}
+  async refreshOrderMessages(orderId){
+    const order=this.db.getOrder(orderId);if(!order)return;
+    for(const item of this.db.listOrderMessages(orderId)){
+      const worker=this.db.getUser(item.user_id);if(!worker)continue;
+      try{await this.tg.editMessage(item.user_id,item.message_id,orderText(order,{worker}),{reply_markup:orderKeyboard(order)});}catch(error){this.log.warn?.('Не удалось обновить сообщение заказа:',error.message);}
+    }
+  }
 
   isManager(user){return user?.role==='manager'&&user?.status==='active';}
   isWorker(user){return user?.role==='worker'&&user?.status==='active';}
@@ -72,6 +90,7 @@ export class BotApp{
       if(text==='👷 Отклики')return this.showApplications(chatId);
       if(text==='✅ Подтвердить смены')return this.showShiftConfirmations(chatId);
       if(text==='💸 Выплаты')return this.showWithdrawals(chatId);
+      if(text==='👥 Грузчики')return this.showWorkers(chatId);
       if(text==='📊 Статистика')return this.safeSend(chatId,statsText(this.db.stats()),{reply_markup:managerMenu});
     }else{
       if(text==='📦 Активные заказы')return this.showOrders(chatId,user);
@@ -159,12 +178,22 @@ export class BotApp{
   }
 
   async showOrders(chatId,user){
-    const orders=this.db.listActiveOrders();if(!orders.length)return this.menu(chatId,user,'Сейчас активных заказов нет. Новые заказы придут уведомлением.');
+    const orders=this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city});if(!orders.length)return this.menu(chatId,user,'Сейчас активных заказов для вашего региона нет. Новые заказы придут уведомлением.');
     await this.safeSend(chatId,`<b>Активные заказы: ${orders.length}</b>`,{reply_markup:workerMenu});
     const apps=new Map(this.db.listUserApplications(user.telegram_id,50).map(item=>[item.order_id,item]));
-    for(const order of orders){const app=apps.get(order.id);await this.safeSend(chatId,orderText(order),{reply_markup:orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id})});}
+    for(const order of orders){const app=apps.get(order.id);await this.safeSend(chatId,orderText(order,{worker:user}),{reply_markup:orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id})});}
   }
   async showManagedOrders(chatId){const list=this.db.listManagedOrders();if(!list.length)return this.safeSend(chatId,'Активных заказов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,orderText(item,{manager:true}),{reply_markup:orderKeyboard(item,{manager:true})});}
+  async showWorkers(chatId){
+    const list=this.db.listWorkers();if(!list.length)return this.safeSend(chatId,'Активных грузчиков нет.',{reply_markup:managerMenu});
+    for(const worker of list){
+      const rows=[
+        [{text:worker.contractor_type==='ip'?'✅ ИП':'Сделать ИП',callback_data:`worker_type:${worker.telegram_id}:ip`},{text:worker.contractor_type==='self_employed'?'✅ Самозанятый':'Самозанятый',callback_data:`worker_type:${worker.telegram_id}:self_employed`}],
+        ...Object.keys(REGIONS).map(key=>[{text:`${worker.region===key?'✅ ':''}${regionLabel(key)}`,callback_data:`worker_region:${worker.telegram_id}:${key}`}]),
+      ];
+      await this.safeSend(chatId,workerProfileText({...worker,region:regionLabel(worker.region)}),{reply_markup:inline(rows)});
+    }
+  }
   async showAccess(chatId){const list=this.db.listPendingAccess();if(!list.length)return this.safeSend(chatId,'Новых заявок на доступ нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,accessText(item),{reply_markup:decisionKeyboard('access_decide',item.id)});}
   async showApplications(chatId,orderId=null){const list=orderId?this.db.listOrderApplications(orderId):this.db.listPendingApplications();if(!list.length)return this.safeSend(chatId,'Новых откликов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,applicationText(item),{reply_markup:decisionKeyboard('application_decide',item.id,'Назначить')});}
   async showShiftConfirmations(chatId){const list=this.db.listPendingShiftConfirmations();if(!list.length)return this.safeSend(chatId,'Смен на подтверждении нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,`${shiftText(item)}\n\nГрузчик: ${e([item.first_name,item.last_name].filter(Boolean).join(' ')||item.username||item.user_id)}`,{reply_markup:inline([[{text:'✅ По плану',callback_data:`shift_complete:${item.id}`},{text:'✏️ Изменить',callback_data:`shift_edit:${item.id}`} ]])});}
@@ -180,12 +209,15 @@ export class BotApp{
     if(data==='access_start')return this.beginAccess(chatId,user);
     if(data==='order_publish'&&this.isManager(user)){
       const session=this.db.getSession(user.telegram_id);if(!session||session.flow!=='order'||session.step!=='confirm')return this.menu(chatId,user,'Черновик не найден. Создайте заказ заново.');
-      const order=this.db.createOrder(session.data,user.telegram_id);this.db.clearSession(user.telegram_id);await this.broadcastWorkers(orderText(order),{reply_markup:orderKeyboard(order)});return this.menu(chatId,user,`Заказ №${order.id} опубликован и разослан грузчикам.`);
+      const payload={...session.data,region:regionKeyByCity(session.data.city)};const order=this.db.createOrder(payload,user.telegram_id);this.db.clearSession(user.telegram_id);await this.broadcastRegionOrder(order);return this.menu(chatId,user,`Заказ №${order.id} опубликован и разослан грузчикам ${order.region?'региона '+regionLabel(order.region):'по доступной базе'}.`);
     }
     let match=data.match(/^access_decide:(\d+):(approve|decline)$/);if(match&&this.isManager(user)){
       const result=this.db.decideAccess(Number(match[1]),user.telegram_id,match[2]==='approve');if(!result)return this.safeSend(chatId,'Заявка уже обработана.');
+      if(match[2]==='approve'){const region=regionKeyByCity(result.city);if(region)this.db.updateWorkerProfile(result.user_id,{region});}
       await this.safeSend(result.user_id,match[2]==='approve'?'<b>Доступ выдан!</b> Теперь вам доступны заказы, смены и личный кабинет.':'Заявка отклонена. Уточнить причину можно у @AleshaPopovichManager',{reply_markup:match[2]==='approve'?workerMenu:removeKeyboard()});return this.safeSend(chatId,`Заявка №${result.id}: ${match[2]==='approve'?'доступ выдан':'отклонена'}.`);
     }
+    match=data.match(/^worker_type:(\\d+):(ip|self_employed)$/);if(match&&this.isManager(user)){const worker=this.db.updateWorkerProfile(match[1],{contractorType:match[2]});return this.safeSend(chatId,worker?`${worker.first_name||worker.username||worker.telegram_id}: оформление — ${worker.contractor_type==='ip'?'ИП (повышенная ставка)':'самозанятый'}.`:'Грузчик не найден.');}
+    match=data.match(/^worker_region:(\\d+):([a-z_]+)$/);if(match&&this.isManager(user)){if(!REGIONS[match[2]])return this.safeSend(chatId,'Неизвестный регион.');const worker=this.db.updateWorkerProfile(match[1],{region:match[2]});return this.safeSend(chatId,worker?`${worker.first_name||worker.username||worker.telegram_id}: регион — ${regionLabel(worker.region)}.`:'Грузчик не найден.');}
     match=data.match(/^order_apply:(\d+)$/);if(match&&this.isWorker(user)){
       const result=this.db.applyToOrder(Number(match[1]),user.telegram_id);const messages={closed:'Заказ уже закрыт или набран.',access:'Нет доступа.',duplicate:'Вы уже откликались на этот заказ.'};if(result.error)return this.safeSend(chatId,messages[result.error]);
       await this.notifyManagers(applicationText(result.application),{reply_markup:decisionKeyboard('application_decide',result.application.id,'Назначить')});return this.safeSend(chatId,'Отклик отправлен. После назначения точный адрес появится в ваших сменах.');
