@@ -225,7 +225,7 @@ export class BotApp{
     match=data.match(/^application_withdraw:(\d+)$/);if(match&&this.isWorker(user)){const result=this.db.withdrawApplication(Number(match[1]),user.telegram_id);return this.safeSend(chatId,result?'Отклик отозван.':'Отклик уже обработан.');}
     match=data.match(/^application_decide:(\d+):(approve|decline)$/);if(match&&this.isManager(user)){
       const result=this.db.decideApplication(Number(match[1]),user.telegram_id,match[2]==='approve');if(!result)return this.safeSend(chatId,'Отклик уже обработан.');if(result.error==='full')return this.safeSend(chatId,'Все места уже заняты или заказ закрыт.');
-      if(match[2]==='approve')await this.safeSend(result.user_id,`<b>Вы назначены на заказ!</b>\n${shiftText(result.shift)}`,{reply_markup:workerMenu});else await this.safeSend(result.user_id,`Отклик на «${e(result.title)}» отклонён. Посмотрите другие активные заказы.`,{reply_markup:workerMenu});return this.safeSend(chatId,`Отклик №${result.id} обработан.`);
+      if(match[2]==='approve'){await this.safeSend(result.user_id,`<b>Вы назначены на заказ!</b>\n${shiftText(result.shift)}`,{reply_markup:workerMenu});await this.refreshOrderMessages(result.order_id);}else await this.safeSend(result.user_id,`Отклик на «${e(result.title)}» отклонён. Посмотрите другие активные заказы.`,{reply_markup:workerMenu});return this.safeSend(chatId,`Отклик №${result.id} обработан.`);
     }
     match=data.match(/^order_apps:(\d+)$/);if(match&&this.isManager(user))return this.showApplications(chatId,Number(match[1]));
     match=data.match(/^order_status:(\d+):(closed|cancelled)$/);if(match&&this.isManager(user)){
