@@ -1,4 +1,4 @@
-import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderText,shiftText,statsText,unverifiedWorkerMenu,verificationText,withdrawalText,workerCreatorMenu,workerLogsText,workerMenu,workerProfileText,workerSettingsText} from './views.mjs';
+import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderListKeyboard,orderText,shiftText,statsText,unverifiedWorkerMenu,verificationText,withdrawalText,workerCreatorMenu,workerLogsText,workerMenu,workerProfileText,workerSettingsText} from './views.mjs';
 import {REGIONS,regionKeyByCity,regionLabel} from './regions.mjs';
 import {decimal,escapeHtml as e,inline,int,money,parseMoscowDate,removeKeyboard} from './utils.mjs';
 
@@ -265,11 +265,51 @@ export class BotApp{
     }
   }
 
-  async showOrders(chatId,user){
-    const orders=this.isVerifiedWorker(user)?this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city,userId:user.telegram_id}):this.db.listActiveOrders({userId:user.telegram_id});if(!orders.length)return this.menu(chatId,user,'Сейчас активных заказов нет.');
-    await this.safeSend(chatId,`<b>Активные заказы: ${orders.length}</b>`,{reply_markup:this.menuFor(user)});
-    const apps=this.isVerifiedWorker(user)?new Map(this.db.listUserApplications(user.telegram_id,50).map(item=>[item.order_id,item])):new Map();
-    for(const order of orders){const app=apps.get(order.id);await this.safeSend(chatId,orderText(order,{worker:user}),{reply_markup:orderKeyboard(order,{applied:app?.status==='pending',applicationId:app?.id,canApply:this.isVerifiedWorker(user)})});}
+  workerOrders(user){
+    return this.isVerifiedWorker(user)
+      ?this.db.listActiveOrders({region:user.region||'',city:user.region?'':user.city,userId:user.telegram_id,limit:100})
+      :this.db.listActiveOrders({userId:user.telegram_id,limit:100});
+  }
+
+  async showOrders(chatId,user,{page=0,messageId=null}={}){
+    const orders=this.workerOrders(user);
+    if(!orders.length){
+      const text='Сейчас активных заказов нет.';
+      if(messageId){try{return await this.tg.editMessage(chatId,messageId,text,{reply_markup:this.menuFor(user)});}catch{}}
+      return this.menu(chatId,user,text);
+    }
+    const totalPages=Math.max(1,Math.ceil(orders.length/5));
+    const safePage=Math.min(totalPages-1,Math.max(0,Number(page)||0));
+    const text=[
+      `<b>📦 Активные заказы: ${orders.length}</b>`,
+      'Выберите заказ. В каждой кнопке: адрес и ориентир выплаты.',
+      '🔥 — срочный заказ.',
+    ].join('\n');
+    const options={reply_markup:orderListKeyboard(orders,user,{page:safePage,pageSize:5})};
+    if(messageId){
+      try{return await this.tg.editMessage(chatId,messageId,text,options);}
+      catch(error){this.log.warn?.('Не удалось перелистнуть список заказов:',error.message);}
+    }
+    return this.safeSend(chatId,text,options);
+  }
+
+  async showOrderDetails(chatId,user,orderId,{page=0,messageId=null}={}){
+    const orders=this.workerOrders(user);
+    const order=orders.find(item=>Number(item.id)===Number(orderId));
+    if(!order)return this.showOrders(chatId,user,{page,messageId});
+    const apps=this.isVerifiedWorker(user)?new Map(this.db.listUserApplications(user.telegram_id,100).map(item=>[item.order_id,item])):new Map();
+    const app=apps.get(order.id);
+    const options={reply_markup:orderKeyboard(order,{
+      applied:app?.status==='pending',
+      applicationId:app?.id,
+      canApply:this.isVerifiedWorker(user),
+      backPage:page,
+    })};
+    if(messageId){
+      try{return await this.tg.editMessage(chatId,messageId,orderText(order,{worker:user}),options);}
+      catch(error){this.log.warn?.('Не удалось открыть заказ из списка:',error.message);}
+    }
+    return this.safeSend(chatId,orderText(order,{worker:user}),options);
   }
   async showManagedOrders(chatId){const list=this.db.listManagedOrders();if(!list.length)return this.safeSend(chatId,'Активных заказов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,orderText(item,{manager:true}),{reply_markup:orderKeyboard(item,{manager:true})});}
   async showWorkers(chatId){
@@ -335,7 +375,14 @@ export class BotApp{
     }
     if(data==='cancel'){this.db.clearSession(user.telegram_id);return this.menu(chatId,user,'Действие отменено.');}
     if(data==='access_start')return this.beginAccess(chatId,user);
-    let match=data.match(/^order_type:(normal|urgent)$/);if(match&&(this.isManager(user)||this.canCreateOrder(user))){
+    if(data==='orders_noop')return;
+    let match=data.match(/^orders_page:(\d+)$/);if(match&&this.isWorker(user)){
+      return this.showOrders(chatId,user,{page:Number(match[1]),messageId:query.message?.message_id||null});
+    }
+    match=data.match(/^order_view:(\d+):(\d+)$/);if(match&&this.isWorker(user)){
+      return this.showOrderDetails(chatId,user,Number(match[1]),{page:Number(match[2]),messageId:query.message?.message_id||null});
+    }
+    match=data.match(/^order_type:(normal|urgent)$/);if(match&&(this.isManager(user)||this.canCreateOrder(user))){
       const session=this.db.getSession(user.telegram_id);if(!session||session.flow!=='order'||session.step!=='type')return this.menu(chatId,user,'Черновик не найден. Создайте заказ заново.');
       this.db.setSession(user.telegram_id,'order','title',{urgent:match[1]==='urgent'});
       return this.safeSend(chatId,`Тип: <b>${match[1]==='urgent'?'🔥 Срочный':'Обычный'}</b>.\nВведите короткое название заказа. Например: «Разгрузка фуры».`,{reply_markup:removeKeyboard()});

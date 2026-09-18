@@ -72,6 +72,36 @@ export function orderText(order,{manager=false,assigned=false,worker=null}={}){
   ].filter(Boolean).join('\n');
 }
 
+const orderTotalForWorker=(order,worker)=>{
+  const contractorType=worker?.contractor_type||'self_employed';
+  const selfRate=Number(order.self_employed_rate)||450;
+  const ipRate=Math.max(550,Number(order.ip_rate)||550);
+  const rate=contractorType==='ip'?ipRate:selfRate;
+  return Math.round(rate*Number(order.duration_hours||0));
+};
+
+const compactOrderAddress=value=>{
+  const text=String(value||'Адрес не указан').trim();
+  return text.length>34?`${text.slice(0,33)}…`:text;
+};
+
+export function orderListKeyboard(orders,worker,{page=0,pageSize=5}={}){
+  const totalPages=Math.max(1,Math.ceil(orders.length/pageSize));
+  const safePage=Math.min(totalPages-1,Math.max(0,Number(page)||0));
+  const start=safePage*pageSize;
+  const rows=orders.slice(start,start+pageSize).map(order=>[{
+    text:`${order.urgent?'🔥 ':''}${compactOrderAddress(order.address)} · ${money(orderTotalForWorker(order,worker))}`,
+    callback_data:`order_view:${order.id}:${safePage}`,
+  }]);
+  if(totalPages>1)rows.push([
+    {text:'⬅️',callback_data:`orders_page:${Math.max(0,safePage-1)}`},
+    {text:`${safePage+1}/${totalPages}`,callback_data:'orders_noop'},
+    {text:'➡️',callback_data:`orders_page:${Math.min(totalPages-1,safePage+1)}`},
+  ]);
+  rows.push([{text:'🔄 Обновить список',callback_data:`orders_page:${safePage}`}]);
+  return inline(rows);
+}
+
 const orderMapUrl=order=>{
   const lat=Number(order.latitude),lon=Number(order.longitude);
   if(Number.isFinite(lat)&&Number.isFinite(lon))return `https://yandex.ru/maps/?ll=${encodeURIComponent(`${lon},${lat}`)}&z=16&pt=${encodeURIComponent(`${lon},${lat}`)}`;
@@ -79,16 +109,17 @@ const orderMapUrl=order=>{
   return `https://yandex.ru/maps/?text=${encodeURIComponent(query)}`;
 };
 
-export function orderKeyboard(order,{manager=false,applied=false,applicationId=null,canApply=true}={}){
+export function orderKeyboard(order,{manager=false,applied=false,applicationId=null,canApply=true,backPage=null}={}){
   const mapButton={text:'🗺 Посмотреть на карте',url:orderMapUrl(order)};
   if(manager)return inline([
     [mapButton],
     [{text:'📨 Отклики',callback_data:`order_apps:${order.id}`}],
     [{text:'✅ Закрыть',callback_data:`order_status:${order.id}:closed`},{text:'⛔ Отменить',callback_data:`order_status:${order.id}:cancelled`}],
   ]);
-  if(applied)return inline([[mapButton],[{text:'Отозвать отклик',callback_data:`application_withdraw:${applicationId}`}]]);
-  if(!canApply)return inline([[mapButton]]);
-  return inline([[mapButton],[{text:'Откликнуться',callback_data:`order_apply:${order.id}`}]]);
+  const back=backPage==null?[]:[[{text:'⬅️ К списку заказов',callback_data:`orders_page:${backPage}`}]];
+  if(applied)return inline([[mapButton],[{text:'Отозвать отклик',callback_data:`application_withdraw:${applicationId}`}],...back]);
+  if(!canApply)return inline([[mapButton],...back]);
+  return inline([[mapButton],[{text:'Откликнуться',callback_data:`order_apply:${order.id}`}],...back]);
 }
 
 export function workerProfileText(user){return [
