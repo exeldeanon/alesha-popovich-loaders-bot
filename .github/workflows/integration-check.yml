@@ -1,0 +1,29 @@
+name: Integration check
+on:
+  push:
+    branches: [integrate/all-updates-20260919]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: find bot -name '*.mjs' -print0 | xargs -0 -n1 node --check
+      - name: Run regression tests when present
+        run: |
+          if [ -d test ]; then node --test test/*.test.mjs; fi
+      - name: Export the exact checked source
+        run: git archive --format=zip HEAD -o source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checked-source
+          path: source.zip
+          retention-days: 1
