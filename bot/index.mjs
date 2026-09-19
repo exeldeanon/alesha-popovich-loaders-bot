@@ -31,6 +31,9 @@ const controller=new AbortController();
 const reminderMinutes=Number(process.env.BOT_REMINDER_MINUTES)||120;
 const orderNudgeMinutes=Math.max(10,Number(process.env.BOT_ORDER_NUDGE_MINUTES)||45);
 const generator=new OrderGenerator({db,app,addressProvider});
+const siteLogUrl=String(process.env.SITE_LOG_PULL_URL||'').replace(/\/$/,'');
+const siteLogSecret=process.env.SITE_LOG_RELAY_SECRET||'';
+const siteLogChatIds=String(process.env.SITE_LOG_CHAT_IDS||process.env.BOT_ADMIN_IDS||'').split(',').map(value=>value.trim()).filter(Boolean);
 
 try{
   await telegram.setCommands([
@@ -54,6 +57,34 @@ const orderNudges=setInterval(()=>app.sendOrderNudges(orderNudgeMinutes).catch(e
 orderNudges.unref();
 generator.tick().catch(error=>console.error('Ошибка первого запуска генератора:',error));
 
+async function relaySiteLogs(){
+  if(!siteLogUrl||!siteLogSecret||!siteLogChatIds.length)return;
+  const headers={Authorization:`Bearer ${siteLogSecret}`};
+  const response=await fetch(`${siteLogUrl}/api/log/pull`,{headers,signal:AbortSignal.timeout(15_000)});
+  if(!response.ok)throw new Error(`получение событий: HTTP ${response.status}`);
+  const payload=await response.json();
+  const delivered=[];
+  for(const event of payload.events||[]){
+    await Promise.all(siteLogChatIds.map(chatId=>telegram.sendMessage(chatId,event.text)));
+    delivered.push(event.id);
+  }
+  if(delivered.length){
+    const ack=await fetch(`${siteLogUrl}/api/log/ack`,{
+      method:'POST',headers:{...headers,'Content-Type':'application/json'},
+      body:JSON.stringify({ids:delivered}),signal:AbortSignal.timeout(15_000),
+    });
+    if(!ack.ok)throw new Error(`подтверждение событий: HTTP ${ack.status}`);
+  }
+}
+
+let relayBusy=false;
+const siteLogRelay=setInterval(async()=>{
+  if(relayBusy)return;relayBusy=true;
+  try{await relaySiteLogs();}catch(error){console.error('Ошибка доставки логов сайта:',error.message);}finally{relayBusy=false;}
+},5_000);
+siteLogRelay.unref();
+relaySiteLogs().catch(error=>console.error('Ошибка доставки логов сайта:',error.message));
+
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>controller.abort());
 
 let offset=Number(db.setting('telegram_offset','0'))||0;
@@ -65,4 +96,4 @@ while(!controller.signal.aborted){
   }
 }
 
-clearInterval(reminders);clearInterval(autoOrders);clearInterval(orderNudges);db.close();console.log('Бот остановлен.');
+clearInterval(reminders);clearInterval(autoOrders);clearInterval(orderNudges);clearInterval(siteLogRelay);db.close();console.log('Бот остановлен.');
