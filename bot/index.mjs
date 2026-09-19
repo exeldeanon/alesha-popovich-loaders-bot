@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import process from 'node:process';
 import {BotDatabase} from './db.mjs';
 import {TelegramClient} from './telegram.mjs';
@@ -31,9 +32,9 @@ const controller=new AbortController();
 const reminderMinutes=Number(process.env.BOT_REMINDER_MINUTES)||120;
 const orderNudgeMinutes=Math.max(10,Number(process.env.BOT_ORDER_NUDGE_MINUTES)||45);
 const generator=new OrderGenerator({db,app,addressProvider});
-const siteLogUrl=String(process.env.SITE_LOG_PULL_URL||'').replace(/\/$/,'');
-const siteLogSecret=process.env.SITE_LOG_RELAY_SECRET||'';
-const siteLogChatIds=String(process.env.SITE_LOG_CHAT_IDS||process.env.BOT_ADMIN_IDS||'').split(',').map(value=>value.trim()).filter(Boolean);
+const siteLogUrl=String(process.env.SITE_LOG_PULL_URL||'https://xn----7sbajmvq1aaib3he.xn--p1ai').replace(/\/$/,'');
+const siteLogSecret=process.env.SITE_LOG_RELAY_SECRET||crypto.createHash('sha256').update(`alesha-site-log:${token}`).digest('hex');
+const siteLogChatIds=String(process.env.SITE_LOG_CHAT_IDS||process.env.BOT_ADMIN_IDS||'8701216148').split(',').map(value=>value.trim()).filter(Boolean);
 
 try{
   await telegram.setCommands([
