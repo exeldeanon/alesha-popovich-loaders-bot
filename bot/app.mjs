@@ -1,6 +1,7 @@
 import {accessText,applicationText,cabinetText,managerMenu,orderKeyboard,orderListKeyboard,orderText,shiftText,statsText,unverifiedWorkerMenu,userSettingsText,verificationText,withdrawalText,workerCreatorMenu,workerFunnelText,workerLogsText,workerMenu,workerProfileText,workerSettingsText} from './views.mjs';
 import {REGIONS,regionKeyByCity,regionLabel} from './regions.mjs';
 import {decimal,escapeHtml as e,inline,int,money,parseMoscowDate,removeKeyboard} from './utils.mjs';
+import {visualPath} from './media.mjs';
 
 const decisionKeyboard=(kind,id,yes='Одобрить',no='Отклонить')=>inline([[
   {text:`✅ ${yes}`,callback_data:`${kind}:${id}:approve`},
@@ -10,10 +11,23 @@ const decisionKeyboard=(kind,id,yes='Одобрить',no='Отклонить')=
 export class BotApp{
   constructor({db,telegram,addressProvider=null,logger=console,adminUsernames=[]}){
     this.db=db;this.tg=telegram;this.addressProvider=addressProvider;this.log=logger;
+    this.visualFileIds=new Map();
     this.adminUsernames=new Set(adminUsernames.map(value=>String(value).replace(/^@/,'').toLowerCase()).filter(Boolean));
   }
 
   async safeSend(chatId,text,options={}){try{return await this.tg.sendMessage(chatId,text,options);}catch(error){this.log.error?.(`Не удалось отправить сообщение ${chatId}:`,error.message);return null;}}
+  async safeSendVisual(chatId,visual,text,options={}){
+    const path=visualPath(visual),cached=this.visualFileIds.get(path);
+    try{
+      const sent=await this.tg.sendPhoto(chatId,cached||path,text,options);
+      const fileId=sent?.photo?.at?.(-1)?.file_id;
+      if(fileId)this.visualFileIds.set(path,fileId);
+      return sent;
+    }catch(error){
+      this.log.warn?.(`Не удалось отправить визуал ${visual}:`,error.message);
+      return this.safeSend(chatId,text,options);
+    }
+  }
   async notifyManagers(text,options={}){for(const manager of this.db.listManagers())await this.safeSend(manager.telegram_id,text,options);}
   async broadcastWorkers(text,options={}){for(const worker of this.db.listActiveWorkers())await this.safeSend(worker.telegram_id,text,options);}
   async sendOrderToWorker(worker,order,{save=false,notification=true}={}){
@@ -109,22 +123,22 @@ export class BotApp{
 
   async start(chatId,user){
     this.db.clearSession(user.telegram_id);
-    if(this.isManager(user))return this.menu(chatId,user,'<b>Панель менеджера «Алёша Попович»</b>');
-    if(this.isVerifiedWorker(user))return this.menu(chatId,user,[
+    if(this.isManager(user))return this.safeSendVisual(chatId,'manager','<b>Панель менеджера «Алёша Попович»</b>',{reply_markup:this.menuFor(user)});
+    if(this.isVerifiedWorker(user))return this.safeSendVisual(chatId,'welcome',[
       `<b>👋 Добро пожаловать, ${e(user.first_name||'коллега')}!</b>`,
       'Здесь можно быстро смотреть активные заказы, откликаться и контролировать выплаты.',
       '',
       '⚙️ В разделе <b>«Настройки»</b> всё гибко настраивается под вас: время работы, режим «Не беспокоить» и каждый тип уведомлений отдельно.',
-    ].join('\n'));
-    if(this.hasBotAccess(user))return this.menu(chatId,user,[
+    ].join('\n'),{reply_markup:this.menuFor(user)});
+    if(this.hasBotAccess(user))return this.safeSendVisual(chatId,'welcome',[
       `<b>👋 Добро пожаловать, ${e(user.first_name||'коллега')}!</b>`,
       'Статус: <b>Не верифицирован</b>.',
       'Заказы уже доступны для просмотра. Чтобы откликаться и брать их, запросите верификацию у менеджера.',
       '',
       '⚙️ В «Настройках» можно заранее настроить уведомления и режим «Не беспокоить».',
-    ].join('\n'));
-    if(user.status==='pending')return this.safeSend(chatId,'<b>👋 Добро пожаловать!</b>\nЗаявка на доступ к боту уже у менеджера. Ожидайте решения.',{reply_markup:removeKeyboard()});
-    return this.safeSend(chatId,[
+    ].join('\n'),{reply_markup:this.menuFor(user)});
+    if(user.status==='pending')return this.safeSendVisual(chatId,'welcome','<b>👋 Добро пожаловать!</b>\nЗаявка на доступ к боту уже у менеджера. Ожидайте решения.',{reply_markup:removeKeyboard()});
+    return this.safeSendVisual(chatId,'welcome',[
       '<b>👋 Добро пожаловать в «Алёша Попович»!</b>',
       'Здесь грузчики находят заказы, смотрят адрес и оплату, откликаются и получают выплаты.',
       'После выдачи доступа появятся гибкие настройки уведомлений и рабочего времени.',
@@ -136,7 +150,7 @@ export class BotApp{
     const text=this.isManager(user)
       ?'<b>Помощь менеджеру</b>\nСоздавайте заказы, рассматривайте отклики и заявки на доступ, подтверждайте смены и выплаты. Любой ввод можно остановить командой /cancel.'
       :'<b>Как пользоваться ботом</b>\n1. Откройте активные заказы и выберите подходящий.\n2. После назначения смена появится в «Моих сменах».\n3. В день работы нажмите «Начать», после работы — «Завершить».\n4. История смен и вывод денег находятся в «Личном кабинете».\n5. В «Настройках» можно выбрать удобное время работы, режим «Не беспокоить» и отдельно включать/выключать уведомления.\n\nПо организационным вопросам: @AleshaPopovichManager';
-    return this.safeSend(chatId,text,{reply_markup:this.menuFor(user)});
+    return this.safeSendVisual(chatId,this.isManager(user)?'manager':'settings',text,{reply_markup:this.menuFor(user)});
   }
 
   async routeMenu(chatId,user,text){
@@ -148,7 +162,7 @@ export class BotApp{
       if(text==='✅ Подтвердить смены')return this.showShiftConfirmations(chatId);
       if(text==='💸 Выплаты')return this.showWithdrawals(chatId);
       if(text==='👥 Грузчики')return this.showWorkers(chatId);
-      if(text==='📊 Статистика')return this.safeSend(chatId,statsText(this.db.stats()),{reply_markup:managerMenu});
+      if(text==='📊 Статистика')return this.safeSendVisual(chatId,'manager',statsText(this.db.stats()),{reply_markup:managerMenu});
     }else{
       if(!this.hasBotAccess(user))return this.start(chatId,user);
       if(text==='🔑 Запросить верификацию')return this.requestVerification(chatId,user);
@@ -171,7 +185,7 @@ export class BotApp{
       {text:'💸 Вывести деньги',callback_data:'cabinet_withdraw'},
       {text:'📜 История смен',callback_data:'cabinet_history'},
     ]]:[];
-    return this.safeSend(chatId,cabinetText({...user,region:geo?.label||regionLabel(user.region)},cabinet),{reply_markup:rows.length?inline(rows):this.menuFor(user)});
+    return this.safeSendVisual(chatId,'cabinet',cabinetText({...user,region:geo?.label||regionLabel(user.region)},cabinet),{reply_markup:rows.length?inline(rows):this.menuFor(user)});
   }
 
   async showUserSettings(chatId,user,{messageId=null,notice=''}={}){
@@ -207,7 +221,7 @@ export class BotApp{
       try{return await this.tg.editMessage(chatId,messageId,text,options);}
       catch(error){this.log.warn?.('Не удалось обновить настройки:',error.message);}
     }
-    return this.safeSend(chatId,text,options);
+    return this.safeSendVisual(chatId,'settings',text,options);
   }
 
   async beginAccess(chatId,user){
@@ -231,7 +245,7 @@ export class BotApp{
   beginOrder(chatId,user){
     if(!this.isManager(user)&&!this.canCreateOrder(user))return this.menu(chatId,user,'⛔ Создание заказов для вашего аккаунта отключено менеджером.');
     this.db.setSession(user.telegram_id,'order','type',{});
-    return this.safeSend(chatId,'Выберите тип заказа:',{reply_markup:inline([[
+    return this.safeSendVisual(chatId,'manager','Выберите тип заказа:',{reply_markup:inline([[
       {text:'Обычный',callback_data:'order_type:normal'},
       {text:'🔥 Срочный',callback_data:'order_type:urgent'},
     ],[{text:'Отмена',callback_data:'cancel'}]])});
@@ -387,7 +401,7 @@ export class BotApp{
     if(!orders.length){
       const text='Сейчас активных заказов нет.';
       if(messageId){try{return await this.tg.editMessage(chatId,messageId,text,{reply_markup:this.menuFor(user)});}catch{}}
-      return this.menu(chatId,user,text);
+      return this.safeSendVisual(chatId,'orders',text,{reply_markup:this.menuFor(user)});
     }
     const totalPages=Math.max(1,Math.ceil(orders.length/5));
     const safePage=Math.min(totalPages-1,Math.max(0,Number(page)||0));
@@ -403,7 +417,7 @@ export class BotApp{
       try{return await this.tg.editMessage(chatId,messageId,text,options);}
       catch(error){this.log.warn?.('Не удалось перелистнуть список заказов:',error.message);}
     }
-    return this.safeSend(chatId,text,options);
+    return this.safeSendVisual(chatId,'orders',text,options);
   }
 
   async showOrderDetails(chatId,user,orderId,{page=0,messageId=null}={}){
@@ -423,12 +437,12 @@ export class BotApp{
       try{return await this.tg.editMessage(chatId,messageId,orderText(order,{worker:user}),options);}
       catch(error){this.log.warn?.('Не удалось открыть заказ из списка:',error.message);}
     }
-    return this.safeSend(chatId,orderText(order,{worker:user}),options);
+    return this.safeSendVisual(chatId,'orders',orderText(order,{worker:user}),options);
   }
-  async showManagedOrders(chatId){const list=this.db.listManagedOrders();if(!list.length)return this.safeSend(chatId,'Активных заказов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,orderText(item,{manager:true}),{reply_markup:orderKeyboard(item,{manager:true})});}
+  async showManagedOrders(chatId){const list=this.db.listManagedOrders();if(!list.length)return this.safeSendVisual(chatId,'manager','Активных заказов нет.',{reply_markup:managerMenu});for(const [index,item] of list.entries()){const send=index===0?this.safeSendVisual.bind(this,chatId,'manager'):this.safeSend.bind(this,chatId);await send(orderText(item,{manager:true}),{reply_markup:orderKeyboard(item,{manager:true})});}}
   async showWorkers(chatId){
-    const list=this.db.listWorkers();if(!list.length)return this.safeSend(chatId,'Активных грузчиков нет.',{reply_markup:managerMenu});
-    for(const worker of list){
+    const list=this.db.listWorkers();if(!list.length)return this.safeSendVisual(chatId,'manager','Активных грузчиков нет.',{reply_markup:managerMenu});
+    for(const [index,worker] of list.entries()){
       const geo=this.db.getRegionGeo(worker.region);
       const label=geo?.label||regionLabel(worker.region);
       const rows=[
@@ -445,7 +459,8 @@ export class BotApp{
           {text:'📊 Воронка',callback_data:`worker_funnel:${worker.telegram_id}`},
         ],
       ];
-      await this.safeSend(chatId,workerProfileText({...worker,region:label}),{reply_markup:inline(rows)});
+      const send=index===0?this.safeSendVisual.bind(this,chatId,'manager'):this.safeSend.bind(this,chatId);
+      await send(workerProfileText({...worker,region:label}),{reply_markup:inline(rows)});
     }
   }
   async showWorkerSettings(chatId,workerId,notice=''){
@@ -462,13 +477,13 @@ export class BotApp{
         {text:'📋 Последние действия',callback_data:`worker_logs:${worker.telegram_id}`},
       ],
     ];
-    return this.safeSend(chatId,`${notice?e(notice)+'\n\n':''}${workerSettingsText(worker)}`,{reply_markup:inline(rows)});
+    return this.safeSendVisual(chatId,'settings',`${notice?e(notice)+'\n\n':''}${workerSettingsText(worker)}`,{reply_markup:inline(rows)});
   }
 
   async showWorkerFunnel(chatId,workerId){
     const worker=this.db.getUser(workerId);if(!worker)return this.safeSend(chatId,'Грузчик не найден.',{reply_markup:managerMenu});
     const funnel=this.db.getWorkerFunnel(workerId);
-    return this.safeSend(chatId,workerFunnelText(worker,funnel),{reply_markup:inline([
+    return this.safeSendVisual(chatId,'settings',workerFunnelText(worker,funnel),{reply_markup:inline([
       [{text:'📋 Логи действий',callback_data:`worker_logs:${worker.telegram_id}`}],
       [{text:'⚙️ К настройкам',callback_data:`worker_settings:${worker.telegram_id}`}],
     ])});
@@ -476,19 +491,20 @@ export class BotApp{
 
   async showWorkerLogs(chatId,workerId){
     const worker=this.db.getUser(workerId);if(!worker)return this.safeSend(chatId,'Грузчик не найден.',{reply_markup:managerMenu});
-    return this.safeSend(chatId,workerLogsText(worker,this.db.listWorkerActionLogs(workerId,25)),{reply_markup:inline([[{text:'⚙️ К настройкам',callback_data:`worker_settings:${worker.telegram_id}`}]])});
+    return this.safeSendVisual(chatId,'settings',workerLogsText(worker,this.db.listWorkerActionLogs(workerId,25)),{reply_markup:inline([[{text:'⚙️ К настройкам',callback_data:`worker_settings:${worker.telegram_id}`}]])});
   }
 
   async showAccess(chatId){
     const access=this.db.listPendingAccess(),verification=this.db.listPendingVerifications();
-    if(!access.length&&!verification.length)return this.safeSend(chatId,'Новых заявок на доступ и верификацию нет.',{reply_markup:managerMenu});
-    for(const item of access)await this.safeSend(chatId,accessText(item),{reply_markup:decisionKeyboard('access_decide',item.id)});
-    for(const item of verification)await this.safeSend(chatId,verificationText(item),{reply_markup:decisionKeyboard('verification_decide',item.id)});
+    if(!access.length&&!verification.length)return this.safeSendVisual(chatId,'manager','Новых заявок на доступ и верификацию нет.',{reply_markup:managerMenu});
+    let first=true;
+    for(const item of access){const send=first?this.safeSendVisual.bind(this,chatId,'manager'):this.safeSend.bind(this,chatId);await send(accessText(item),{reply_markup:decisionKeyboard('access_decide',item.id)});first=false;}
+    for(const item of verification){const send=first?this.safeSendVisual.bind(this,chatId,'manager'):this.safeSend.bind(this,chatId);await send(verificationText(item),{reply_markup:decisionKeyboard('verification_decide',item.id)});first=false;}
   }
-  async showApplications(chatId,orderId=null){const list=orderId?this.db.listOrderApplications(orderId):this.db.listPendingApplications();if(!list.length)return this.safeSend(chatId,'Новых откликов нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,applicationText(item),{reply_markup:decisionKeyboard('application_decide',item.id,'Назначить')});}
-  async showShiftConfirmations(chatId){const list=this.db.listPendingShiftConfirmations();if(!list.length)return this.safeSend(chatId,'Смен на подтверждении нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,`${shiftText(item)}\n\nГрузчик: ${e([item.first_name,item.last_name].filter(Boolean).join(' ')||item.username||item.user_id)}`,{reply_markup:inline([[{text:'✅ По плану',callback_data:`shift_complete:${item.id}`},{text:'✏️ Изменить',callback_data:`shift_edit:${item.id}`} ]])});}
-  async showWithdrawals(chatId){const list=this.db.listPendingWithdrawals();if(!list.length)return this.safeSend(chatId,'Заявок на выплату нет.',{reply_markup:managerMenu});for(const item of list)await this.safeSend(chatId,withdrawalText(item),{reply_markup:decisionKeyboard('withdrawal_decide',item.id,'Выплачено')});}
-  async showShifts(chatId,user,history){const list=this.db.listUserShifts(user.telegram_id,{history});if(!list.length)return this.menu(chatId,user,history?'История смен пока пустая.':'Назначенных смен пока нет.');for(const shift of list){let buttons=[];if(shift.status==='assigned')buttons=[[{text:'▶️ Начать смену',callback_data:`shift_start:${shift.id}`}]];if(shift.status==='in_progress')buttons=[[{text:'🏁 Завершить смену',callback_data:`shift_finish:${shift.id}`}]];await this.safeSend(chatId,shiftText(shift,{history}),{reply_markup:buttons.length?inline(buttons):this.menuFor(user)});}}
+  async showApplications(chatId,orderId=null){const list=orderId?this.db.listOrderApplications(orderId):this.db.listPendingApplications();if(!list.length)return this.safeSendVisual(chatId,'orders','Новых откликов нет.',{reply_markup:managerMenu});for(const [index,item] of list.entries()){const send=index===0?this.safeSendVisual.bind(this,chatId,'orders'):this.safeSend.bind(this,chatId);await send(applicationText(item),{reply_markup:decisionKeyboard('application_decide',item.id,'Назначить')});}}
+  async showShiftConfirmations(chatId){const list=this.db.listPendingShiftConfirmations();if(!list.length)return this.safeSendVisual(chatId,'work','Смен на подтверждении нет.',{reply_markup:managerMenu});for(const [index,item] of list.entries()){const send=index===0?this.safeSendVisual.bind(this,chatId,'work'):this.safeSend.bind(this,chatId);await send(`${shiftText(item)}\n\nГрузчик: ${e([item.first_name,item.last_name].filter(Boolean).join(' ')||item.username||item.user_id)}`,{reply_markup:inline([[{text:'✅ По плану',callback_data:`shift_complete:${item.id}`},{text:'✏️ Изменить',callback_data:`shift_edit:${item.id}`} ]])});}}
+  async showWithdrawals(chatId){const list=this.db.listPendingWithdrawals();if(!list.length)return this.safeSendVisual(chatId,'cabinet','Заявок на выплату нет.',{reply_markup:managerMenu});for(const [index,item] of list.entries()){const send=index===0?this.safeSendVisual.bind(this,chatId,'cabinet'):this.safeSend.bind(this,chatId);await send(withdrawalText(item),{reply_markup:decisionKeyboard('withdrawal_decide',item.id,'Выплачено')});}}
+  async showShifts(chatId,user,history){const list=this.db.listUserShifts(user.telegram_id,{history});if(!list.length)return this.menu(chatId,user,history?'История смен пока пустая.':'Назначенных смен пока нет.');for(const [index,shift] of list.entries()){let buttons=[];if(shift.status==='assigned')buttons=[[{text:'▶️ Начать смену',callback_data:`shift_start:${shift.id}`}]];if(shift.status==='in_progress')buttons=[[{text:'🏁 Завершить смену',callback_data:`shift_finish:${shift.id}`}]];const send=index===0?this.safeSendVisual.bind(this,chatId,'work'):this.safeSend.bind(this,chatId);await send(shiftText(shift,{history}),{reply_markup:buttons.length?inline(buttons):this.menuFor(user)});}}
 
   async createWithdrawal(chatId,user,amount){const result=this.db.createWithdrawal(user.telegram_id,amount);if(result.error)return this.safeSend(chatId,`Недоступная сумма. Сейчас можно вывести ${money(result.cabinet.available)}.`);this.db.clearSession(user.telegram_id);await this.notifyManagers(withdrawalText(result.withdrawal),{reply_markup:decisionKeyboard('withdrawal_decide',result.withdrawal.id,'Выплачено')});return this.menu(chatId,user,`Заявка на ${money(amount)} отправлена менеджеру.`);}
 
