@@ -64,6 +64,7 @@ export function orderText(order,{manager=false,assigned=false,worker=null}={}){
     manager?`⭐ ИП: ${money(ipRate)}/ч · ориентир ${money(ipTotal)}`:null,
     worker?.verified===1?`${contractorType==='ip'?'⭐ ИП':'💰 Самозанятый'}: <b>${money(workerRate)}/ч</b> · ориентир выплаты <b>${money(workerTotal)}</b>`:null,
     (!worker||worker?.verified!==1)&&!manager?`💰 Самозанятый: ${money(selfRate)}/ч · ориентир ${money(selfTotal)}\n⭐ ИП: ${money(ipRate)}/ч · ориентир ${money(ipTotal)}`:null,
+    `📈 ИП получают больше: +${Math.max(0,Math.round((ipRate/selfRate-1)*100))}% к базовой ставке`,
     `👥 Свободно мест: ${places} из ${order.people_needed}`,
     manager&&simulated?`🧪 Демо-заполнение: ${simulated}; реальных назначено: ${real}`:null,
     order.description?`\n${e(short(order.description,500))}`:null,
