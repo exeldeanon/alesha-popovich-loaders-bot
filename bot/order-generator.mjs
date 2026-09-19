@@ -2,11 +2,11 @@ import process from 'node:process';
 import {randomFrom,randomInt} from './regions.mjs';
 
 const TEMPLATES=[
-  {title:'Разгрузка фуры',locationType:'warehouse',duration:[3,7],people:[3,8],description:'Разгрузка и перенос груза на объекте.'},
-  {title:'Разгрузка стройматериалов',locationType:'warehouse',duration:[3,8],people:[3,10],description:'Разгрузка стройматериалов, работа в бригаде.'},
-  {title:'Квартирный переезд',locationType:'apartment',duration:[2,6],people:[2,5],description:'Перенос мебели и коробок при переезде.'},
-  {title:'Перенос мебели',locationType:'apartment',duration:[2,5],people:[2,4],description:'Перенос и расстановка мебели.'},
-  {title:'Разгрузка товара',locationType:'retail',duration:[2,6],people:[2,6],description:'Разгрузка поставки и перенос товара в помещение.'},
+  {title:'Разгрузка фуры',locationType:'warehouse',duration:[6,12],people:[2,5],description:'Длинная смена: разгрузка и перенос груза на объекте.'},
+  {title:'Разгрузка стройматериалов',locationType:'warehouse',duration:[6,14],people:[2,5],description:'Длинная смена по разгрузке стройматериалов в бригаде.'},
+  {title:'Квартирный переезд',locationType:'apartment',duration:[5,10],people:[2,5],description:'Переезд под ключ: мебель, коробки и аккуратная расстановка.'},
+  {title:'Перенос мебели',locationType:'apartment',duration:[5,9],people:[1,4],description:'Перенос и расстановка мебели, техника и упаковка.'},
+  {title:'Разгрузка товара',locationType:'retail',duration:[5,11],people:[2,5],description:'Разгрузка поставки и перенос товара в помещение.'},
 ];
 
 const weightedIpRate=urgent=>randomFrom(urgent?[650,650,700,700,750,800]:[550,550,550,600,600,650]);
@@ -15,7 +15,9 @@ export class OrderGenerator{
   constructor({db,app,addressProvider,logger=console}){
     this.db=db;this.app=app;this.addressProvider=addressProvider;this.log=logger;
     this.enabled=process.env.BOT_AUTO_ORDERS!=='0';
-    this.simulationMode=process.env.BOT_SIMULATION_MODE==='1';
+    // Demand simulation is part of the production feed: it creates urgency
+    // for workers without creating fake Telegram users or fake shifts.
+    this.simulationMode=process.env.BOT_SIMULATION_MODE!=='off';
     this.maxActive=7;
     this.startupTargets=new Map();
     this.seededRegions=new Set();
@@ -71,7 +73,7 @@ export class OrderGenerator{
     const urgent=Math.random()<urgentChance;
     const template=randomFrom(TEMPLATES);
     const durationHours=randomInt(template.duration[0],template.duration[1]);
-    const peopleNeeded=randomInt(template.people[0],template.people[1]);
+    const peopleNeeded=Math.min(5,randomInt(template.people[0],template.people[1]));
     const hoursBefore=urgent?randomInt(1,3):randomInt(4,24);
     const minute=randomFrom([0,15,30,45]);
     const starts=new Date(Date.now()+hoursBefore*60*60_000);
@@ -93,7 +95,7 @@ export class OrderGenerator{
       selfEmployedRate,
       ipRate,
       amount:selfEmployedRate*durationHours,
-      description:template.description,
+      description:`${template.description} ИП получают повышенную ставку — обычно на 20–35% выше базовой.`,
       urgent,
       simulatedAssigned,
       targetUserId:worker.telegram_id,
