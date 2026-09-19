@@ -123,7 +123,10 @@ export class BotApp{
 
   async start(chatId,user){
     this.db.clearSession(user.telegram_id);
-    if(this.isManager(user))return this.safeSendVisual(chatId,'manager','<b>Панель менеджера «Алёша Попович»</b>',{reply_markup:this.menuFor(user)});
+    if(this.isManager(user)){
+      this.db.setSetting('site_log_chat_ids',String(chatId));
+      return this.safeSendVisual(chatId,'manager','<b>Панель менеджера «Алёша Попович»</b>\nЛоги сайта привязаны к этому чату.',{reply_markup:this.menuFor(user)});
+    }
     if(this.isVerifiedWorker(user))return this.safeSendVisual(chatId,'welcome',[
       `<b>👋 Добро пожаловать, ${e(user.first_name||'коллега')}!</b>`,
       'Здесь можно быстро смотреть активные заказы, откликаться и контролировать выплаты.',

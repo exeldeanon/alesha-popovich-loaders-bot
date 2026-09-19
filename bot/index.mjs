@@ -34,7 +34,7 @@ const orderNudgeMinutes=Math.max(10,Number(process.env.BOT_ORDER_NUDGE_MINUTES)|
 const generator=new OrderGenerator({db,app,addressProvider});
 const siteLogUrl=String(process.env.SITE_LOG_PULL_URL||'https://xn----7sbajmvq1aaib3he.xn--p1ai').replace(/\/$/,'');
 const siteLogSecret=process.env.SITE_LOG_RELAY_SECRET||crypto.createHash('sha256').update(`alesha-site-log:${token}`).digest('hex');
-const siteLogChatIds=String(process.env.SITE_LOG_CHAT_IDS||process.env.BOT_ADMIN_IDS||'8701216148').split(',').map(value=>value.trim()).filter(Boolean);
+const configuredSiteLogChatIds=String(process.env.SITE_LOG_CHAT_IDS||process.env.BOT_ADMIN_IDS||'8701216148').split(',').map(value=>value.trim()).filter(Boolean);
 
 try{
   await telegram.setCommands([
@@ -59,6 +59,7 @@ orderNudges.unref();
 generator.tick().catch(error=>console.error('Ошибка первого запуска генератора:',error));
 
 async function relaySiteLogs(){
+  const siteLogChatIds=String(db.setting('site_log_chat_ids',configuredSiteLogChatIds.join(','))).split(',').map(value=>value.trim()).filter(Boolean);
   if(!siteLogUrl||!siteLogSecret||!siteLogChatIds.length)return;
   const headers={Authorization:`Bearer ${siteLogSecret}`};
   const response=await fetch(`${siteLogUrl}/api/log/pull`,{headers,signal:AbortSignal.timeout(15_000)});
