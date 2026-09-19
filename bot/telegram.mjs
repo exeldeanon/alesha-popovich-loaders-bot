@@ -1,5 +1,5 @@
 import {readFile} from 'node:fs/promises';
-import {basename} from 'node:path';
+import {basename,extname} from 'node:path';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -23,7 +23,8 @@ export class TelegramClient {
     }
     if(fileField&&filePath){
       const bytes=await readFile(filePath);
-      form.set(fileField,new Blob([bytes],{type:'image/png'}),basename(filePath));
+      const mime=extname(filePath).toLowerCase()==='.jpg'||extname(filePath).toLowerCase()==='.jpeg'?'image/jpeg':'image/png';
+      form.set(fileField,new Blob([bytes],{type:mime}),basename(filePath));
     }
     const response=await fetch(`${this.base}/${method}`,{method:'POST',body:form,signal:AbortSignal.timeout(this.timeoutMs)});
     const data=await response.json().catch(()=>({ok:false,description:`HTTP ${response.status}` }));
